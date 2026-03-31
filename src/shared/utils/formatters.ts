@@ -7,3 +7,26 @@ export const fmt = (n: number, cur = 'RSD') => {
 
 export const generateOTP = (): string => Math.floor(100000 + Math.random() * 900000).toString();
 
+export type VStatus = 'confirmed' | 'rejected' | 'expired' | 'pending';
+
+export const statusConfig: Record<VStatus, { color: string; bg: string; label: string; icon: string }> = {
+  confirmed: { color: C.accent, bg: C.accentGlow, label: 'Potvrđeno', icon: 'checkmark-circle' },
+  rejected: { color: C.danger, bg: C.dangerGlow, label: 'Odbijeno', icon: 'close-circle' },
+  expired: { color: C.warning, bg: C.warningGlow, label: 'Isteklo', icon: 'time' },
+  pending: { color: C.primary, bg: C.primaryGlow, label: 'Na čekanju', icon: 'hourglass' },
+};
+
+export const statusCfg = statusConfig;
+
+export const PAYMENT_CODES = [
+  { code: '220', desc: 'Promet robe i usluga - Loss plaćanja' },
+  { code: '221', desc: 'Promet robe i usluga - Loss doznake' },
+  { code: '240', desc: 'Energija i komunalne usluge' },
+  { code: '241', desc: 'Telefonski i poštanski troškovi' },
+  { code: '253', desc: 'Zakupnine' },
+  { code: '254', desc: 'Članarine i pretplate' },
+  { code: '265', desc: 'Kazne' },
+  { code: '281', desc: 'Premije osiguranja' },
+  { code: '289', desc: 'Ostala plaćanja' },
+  { code: '290', desc: 'Lična primanja' },
+];
