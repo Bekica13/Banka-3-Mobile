@@ -1,4 +1,3 @@
-// ═══ IAccountRepository ═══
 import { Account, Transaction } from '../../../shared/types/models';
 export interface IAccountRepository {
   getAccounts(): Promise<Account[]>;
