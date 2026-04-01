@@ -3,6 +3,8 @@ export interface IExchangeRepository {
   getRates(): Promise<ExchangeRate[]>;
 
   convert(
+    fromAccountId: number,
+    toAccountId: number,
     fromCurrency: string,
     toCurrency: string,
     amount: number

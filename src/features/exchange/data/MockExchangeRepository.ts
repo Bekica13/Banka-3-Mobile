@@ -1,5 +1,6 @@
 import { IExchangeRepository } from '../domain/IExchangeRepository';
 import { ExchangeRate } from '../../../shared/types/models';
+import { applyMockExchangeTransfer } from '../../accounts/data/mockAccountStore';
 
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -19,24 +20,45 @@ export class MockExchangeRepository implements IExchangeRepository {
     return RATES;
   }
 
-  async convert(fromCurrency: string, toCurrency: string, amount: number) {
+  async convert(
+    fromAccountId: number,
+    toAccountId: number,
+    fromCurrency: string,
+    toCurrency: string,
+    amount: number
+  ) {
     await delay(800);
 
-    const rate = RATES.find(r => r.fromCurrency === fromCurrency);
+    const foreignCurrency = fromCurrency === 'RSD' ? toCurrency : fromCurrency;
+    const rate = RATES.find(r => r.fromCurrency === foreignCurrency);
 
     if (!rate) throw new Error('Rate not found');
 
     const isBuying = fromCurrency === 'RSD'; // RSD -> foreign
 
-    const usedRate = isBuying ? rate.sellRate : rate.buyRate;
+    const usedRate = this.roundToTwo(isBuying ? rate.sellRate : rate.buyRate);
 
-    const convertedAmount = isBuying
+    const convertedAmount = this.roundToTwo(isBuying
       ? amount / usedRate   // RSD -> EUR
-      : amount * usedRate;  // EUR -> RSD
+      : amount * usedRate); // EUR -> RSD
+
+    applyMockExchangeTransfer({
+      fromAccountId,
+      toAccountId,
+      fromAmount: amount,
+      toAmount: convertedAmount,
+      fromCurrency,
+      toCurrency,
+      rate: usedRate,
+    });
 
     return {
       convertedAmount,
       rate: usedRate,
     };
+  }
+
+  private roundToTwo(value: number): number {
+    return Math.round(value * 100) / 100;
   }
 }

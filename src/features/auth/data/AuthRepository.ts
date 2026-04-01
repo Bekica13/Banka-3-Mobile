@@ -4,13 +4,17 @@ import { NetworkClient } from '../../../core/network/NetworkClient';
 import { tokenStorage } from '../../../core/storage/tokenStorage';
 
 interface LoginApiResponse {
-  access_token: string;
-  refresh_token: string;
+  access_token?: string;
+  refresh_token?: string;
+  accessToken?: string;
+  refreshToken?: string;
 }
 
 interface RefreshApiResponse {
-  access_token: string;
-  refresh_token: string;
+  access_token?: string;
+  refresh_token?: string;
+  accessToken?: string;
+  refreshToken?: string;
 }
 
 export class AuthRepository implements IAuthRepository {
@@ -22,14 +26,20 @@ export class AuthRepository implements IAuthRepository {
       password: params.password,
     });
 
-    await tokenStorage.saveTokens(response.access_token, response.refresh_token);
+    const accessToken = response.access_token ?? response.accessToken;
+    const refreshToken = response.refresh_token ?? response.refreshToken;
+    if (!accessToken || !refreshToken) {
+      throw new Error('Server nije vratio pristupne tokene.');
+    }
 
-    const user = this.extractUserFromJwt(response.access_token, params.email);
+    await tokenStorage.saveTokens(accessToken, refreshToken);
+
+    const user = this.extractUserFromJwt(accessToken, params.email);
 
     return {
       tokens: {
-        accessToken: response.access_token,
-        refreshToken: response.refresh_token,
+        accessToken,
+        refreshToken,
       },
       user,
     };
@@ -75,8 +85,14 @@ export class AuthRepository implements IAuthRepository {
       refresh_token: refreshToken,
     });
 
-    await tokenStorage.saveTokens(response.access_token, response.refresh_token);
-    return response.access_token;
+    const newAccessToken = response.access_token ?? response.accessToken;
+    const newRefreshToken = response.refresh_token ?? response.refreshToken ?? refreshToken;
+    if (!newAccessToken) {
+      throw new Error('Server nije vratio novi access token.');
+    }
+
+    await tokenStorage.saveTokens(newAccessToken, newRefreshToken);
+    return newAccessToken;
   }
 
   private decodeJwt(token: string): Record<string, any> | null {

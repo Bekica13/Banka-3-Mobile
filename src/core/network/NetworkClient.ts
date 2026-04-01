@@ -1,8 +1,7 @@
 import { tokenStorage } from '../storage/tokenStorage';
 
 export const API_CONFIG = {
-
-  BASE_URL: 'http://192.168.1.102:8080',
+  BASE_URL: process.env.EXPO_PUBLIC_API_BASE_URL || 'http://192.168.1.102:8080',
   USE_MOCK: false,  // Connected to real backend
 
   TIMEOUT: 10000,
@@ -55,12 +54,17 @@ export class NetworkClient {
 
   private async request<T>(method: string, path: string, body?: unknown, retry = true): Promise<T> {
     const headers = await this.getHeaders();
+    let response: Response;
 
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    try {
+      response = await fetch(`${this.baseUrl}${path}`, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch (error) {
+      throw this.mapNetworkError(error);
+    }
 
     // 401 Try token refresh 
     if (response.status === 401 && retry) {
@@ -121,19 +125,29 @@ export class NetworkClient {
 
       // Call refresh endpoint WITHOUT auth header (use refresh token in body)
       const headers = await this.getHeaders(true);
-      const response = await fetch(`${this.baseUrl}/api/token/refresh`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      });
+      let response: Response;
+      try {
+        response = await fetch(`${this.baseUrl}/api/token/refresh`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ refresh_token: refreshToken }),
+        });
+      } catch (error) {
+        throw this.mapNetworkError(error);
+      }
 
       if (!response.ok) throw new Error('Refresh failed');
 
       const data = await response.json();
-      const newAccessToken = data.access_token;
+      const newAccessToken = data.access_token ?? data.accessToken;
+      const newRefreshToken = data.refresh_token ?? data.refreshToken ?? refreshToken;
+
+      if (!newAccessToken) {
+        throw new Error('Refresh response missing access token');
+      }
 
       // Swagger: /token/refresh only returns { access_token }, keep existing refresh token
-      await tokenStorage.saveTokens(newAccessToken, refreshToken);
+      await tokenStorage.saveTokens(newAccessToken, newRefreshToken);
 
       // Resolve all queued requests
       this.refreshQueue.forEach(({ resolve }) => resolve(newAccessToken));
@@ -148,6 +162,15 @@ export class NetworkClient {
     } finally {
       this.isRefreshing = false;
     }
+  }
+
+  private mapNetworkError(error: unknown): ApiError {
+    const message = error instanceof Error ? error.message : String(error);
+
+    return new ApiError(
+      0,
+      `Ne mogu da pristupim serveru na ${this.baseUrl}. Proverite da li su telefon/emulator i backend na istoj mrezi, ili postavite EXPO_PUBLIC_API_BASE_URL. Detalj: ${message}`
+    );
   }
 }
 

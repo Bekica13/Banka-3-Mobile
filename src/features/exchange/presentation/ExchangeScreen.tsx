@@ -1,72 +1,43 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { View, Text, ScrollView, TextInput, TouchableOpacity, Modal, StyleSheet } from 'react-native';
+import React, { useState, useMemo } from 'react';
+import { View, Text, ScrollView, TextInput, TouchableOpacity, Modal, StyleSheet, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { C } from '../../../shared/constants/theme';
-import { MOCK_ACCOUNTS } from '../../../shared/data/mockData';
 import { fmt } from '../../../shared/utils/formatters';
-import { MockExchangeRepository } from '../data/MockExchangeRepository';
-import { ExchangeRate } from '../../../shared/types/models';
+import { useAccounts } from '../../../shared/hooks/useFeatures';
+import { useExchangeRates } from '../../../shared/hooks/useFeatures';
+import { container } from '../../../core/di/container';
+import { Account } from '../../../shared/types/models';
 
 interface Props { onBack: () => void; }
 
 export default function ExchangeScreen({ onBack }: Props) {
-  const exchangeRepo = useMemo(() => new MockExchangeRepository(), []);
+  const { state: accountsState, refresh: refreshAccounts } = useAccounts();
+  const { state: ratesState } = useExchangeRates();
 
-  const rsdAccounts = MOCK_ACCOUNTS.filter(a => a.currency === 'RSD');
-  const forAccounts = MOCK_ACCOUNTS.filter(a => a.currency !== 'RSD');
+  const accounts = accountsState.data ?? [];
+  const rates = ratesState.data ?? [];
 
-  const initialFromAcc = rsdAccounts[0] ?? MOCK_ACCOUNTS[0];
-  const initialToAcc =
-    forAccounts[0] ??
-    MOCK_ACCOUNTS.find(a => a.id !== initialFromAcc?.id) ??
-    MOCK_ACCOUNTS[0];
+  const rsdAccounts = accounts.filter(a => a.currency === 'RSD');
+  const forAccounts = accounts.filter(a => a.currency !== 'RSD');
 
-  const [fromAcc, setFromAcc] = useState(initialFromAcc);
-  const [toAcc, setToAcc] = useState(initialToAcc);
-  const [amount, setAmount] = useState('');
-  const [rates, setRates] = useState<ExchangeRate[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState('');
-  const [step, setStep] = useState<'rates' | 'convert' | 'confirm' | 'success'>('rates');
+  const [fromAcc, setFromAcc] = useState<Account | null>(null);
+  const [toAcc, setToAcc]     = useState<Account | null>(null);
+  const [amount, setAmount]   = useState('');
+  const [step, setStep]       = useState<'rates' | 'convert' | 'confirm' | 'success'>('rates');
   const [showFrom, setShowFrom] = useState(false);
-  const [showTo, setShowTo] = useState(false);
+  const [showTo, setShowTo]     = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [completedConversion, setCompletedConversion] = useState<{ convertedAmount: number; rate: number } | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
+  // Pick defaults once accounts load
+  const resolvedFrom = fromAcc ?? rsdAccounts[0] ?? accounts[0] ?? null;
+  const resolvedTo   = toAcc   ?? forAccounts[0] ?? accounts.find(a => a.accountNumber !== resolvedFrom?.accountNumber) ?? null;
 
-    const loadRates = async () => {
-      try {
-        setLoading(true);
-        setLoadError('');
-        const data = await exchangeRepo.getRates();
-        if (!cancelled) {
-          setRates(data);
-        }
-      } catch {
-        if (!cancelled) {
-          setLoadError('Greška pri učitavanju kursne liste.');
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    };
-
-    loadRates();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [exchangeRepo]);
-
-  const buying = fromAcc.currency === 'RSD';
-  const foreignCur = buying ? toAcc.currency : fromAcc.currency;
-  const rateObj = rates.find(r => r.fromCurrency === foreignCur);
-
-  const activeRate = buying
-    ? (rateObj?.sellRate ?? 0)
-    : (rateObj?.buyRate ?? 0);
+  // ── Derived exchange logic ──────────────────────────────────────────────────
+  const buying      = resolvedFrom?.currency === 'RSD';
+  const foreignCur  = buying ? resolvedTo?.currency : resolvedFrom?.currency;
+  const rateObj     = rates.find(r => r.fromCurrency === foreignCur);
+  const activeRate  = buying ? (rateObj?.sellRate ?? 0) : (rateObj?.buyRate ?? 0);
 
   const amountNum = useMemo(() => {
     const normalized = amount.replace(',', '.');
@@ -74,58 +45,90 @@ export default function ExchangeScreen({ onBack }: Props) {
     return Number.isFinite(parsed) ? parsed : 0;
   }, [amount]);
 
-  const hasTypedAmount = amount.trim() !== '';
-  const hasPositiveAmount = amountNum > 0;
-  const hasEnoughFunds = amountNum <= fromAcc.available;
-  const differentAccounts = fromAcc.id !== toAcc.id;
-  const differentCurrencies = fromAcc.currency !== toAcc.currency;
-  const hasRate = activeRate > 0;
+  const hasTypedAmount      = amount.trim() !== '';
+  const hasPositiveAmount   = amountNum > 0;
+  const hasEnoughFunds      = amountNum <= (resolvedFrom?.availableBalance ?? 0);
+  const differentAccounts   = resolvedFrom?.accountNumber !== resolvedTo?.accountNumber;
+  const differentCurrencies = resolvedFrom?.currency !== resolvedTo?.currency;
+  const hasRate             = activeRate > 0;
 
   const isValid =
-    hasTypedAmount &&
-    hasPositiveAmount &&
-    hasEnoughFunds &&
-    differentAccounts &&
-    differentCurrencies &&
-    hasRate;
+    hasTypedAmount && hasPositiveAmount && hasEnoughFunds &&
+    differentAccounts && differentCurrencies && hasRate;
 
   const validationMessage = useMemo(() => {
-    if (!hasTypedAmount) return '';
-    if (!hasPositiveAmount) return 'Unesite ispravan iznos.';
-    if (!differentAccounts) return 'Izaberite različite račune.';
+    if (!hasTypedAmount)      return '';
+    if (!hasPositiveAmount)   return 'Unesite ispravan iznos.';
+    if (!differentAccounts)   return 'Izaberite različite račune.';
     if (!differentCurrencies) return 'Računi moraju biti u različitim valutama.';
-    if (!hasRate) return 'Kurs za izabranu valutu nije dostupan.';
-    if (!hasEnoughFunds) return 'Nedovoljno sredstava na računu.';
+    if (!hasRate)             return 'Kurs za izabranu valutu nije dostupan.';
+    if (!hasEnoughFunds)      return 'Nedovoljno sredstava na računu.';
     return '';
   }, [hasTypedAmount, hasPositiveAmount, differentAccounts, differentCurrencies, hasRate, hasEnoughFunds]);
 
   const converted = useMemo(() => {
     if (!isValid) return 0;
-    if (buying) return amountNum / activeRate;
-    return amountNum * activeRate;
+    return buying ? amountNum / activeRate : amountNum * activeRate;
   }, [amountNum, activeRate, buying, isValid]);
 
   const handleSwap = () => {
-    const t = fromAcc;
-    setFromAcc(toAcc);
-    setToAcc(t);
+    const prev = resolvedFrom;
+    setFromAcc(resolvedTo);
+    setToAcc(prev);
   };
 
   const handleAmountChange = (text: string) => {
     const normalized = text.replace(/,/g, '.').replace(/[^0-9.]/g, '');
     const parts = normalized.split('.');
-    const safeValue =
-      parts.length <= 2
-        ? normalized
-        : `${parts[0]}.${parts.slice(1).join('')}`;
-
-    setAmount(safeValue);
+    setAmount(parts.length <= 2 ? normalized : `${parts[0]}.${parts.slice(1).join('')}`);
   };
 
-  const fromPickerAccounts = MOCK_ACCOUNTS.filter(a => a.id !== toAcc.id);
-  const toPickerAccounts = MOCK_ACCOUNTS.filter(a => a.id !== fromAcc.id);
+  const handleConfirm = async () => {
+    if (!isValid || !resolvedFrom || !resolvedTo) return;
+    setSubmitting(true);
+    try {
+      const result = await container.exchangeRepository.convert(
+        resolvedFrom.id,
+        resolvedTo.id,
+        resolvedFrom.currency,
+        resolvedTo.currency,
+        amountNum,
+      );
+      setCompletedConversion(result);
+      await refreshAccounts();
+      setStep('success');
+    } catch (e: any) {
+      // surface error inline — stay on confirm screen
+      alert(e.message ?? 'Greška pri konverziji');
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
-  if (!fromAcc || !toAcc) {
+  // ── Loading / error states ──────────────────────────────────────────────────
+  if (accountsState.loading || ratesState.loading) {
+    return (
+      <View style={[styles.flex1, styles.center, { backgroundColor: C.bg }]}>
+        <ActivityIndicator color={C.primary} size="large" />
+      </View>
+    );
+  }
+
+  if (accountsState.error || ratesState.error) {
+    return (
+      <View style={[styles.flex1, styles.center, { backgroundColor: C.bg, padding: 24 }]}>
+        <Ionicons name="alert-circle-outline" size={48} color={C.textSecondary} />
+        <Text style={[styles.successSub, { marginTop: 12 }]}>
+          {accountsState.error ?? ratesState.error}
+        </Text>
+        <TouchableOpacity style={[styles.primaryBtn, { marginTop: 20 }]} onPress={onBack}>
+          <Text style={styles.primaryBtnText}>Nazad</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  if (!resolvedFrom || !resolvedTo) {
     return (
       <View style={[styles.flex1, styles.center, { backgroundColor: C.bg, padding: 24 }]}>
         <Text style={styles.successSub}>Nema dostupnih računa.</Text>
@@ -136,103 +139,112 @@ export default function ExchangeScreen({ onBack }: Props) {
     );
   }
 
-  if (loading) {
-    return (
-      <View style={[styles.flex1, styles.center, { backgroundColor: C.bg, padding: 24 }]}>
-        <Text style={styles.successSub}>Loading...</Text>
-      </View>
-    );
-  }
+  const fromPickerAccounts = accounts.filter(a => a.accountNumber !== resolvedTo.accountNumber);
+  const toPickerAccounts   = accounts.filter(a => a.accountNumber !== resolvedFrom.accountNumber);
 
-  if (loadError) {
-    return (
-      <View style={[styles.flex1, styles.center, { backgroundColor: C.bg, padding: 24 }]}>
-        <Ionicons name="alert-circle-outline" size={48} color={C.textSecondary} />
-        <Text style={[styles.successSub, { marginTop: 12 }]}>{loadError}</Text>
-        <TouchableOpacity style={[styles.primaryBtn, { marginTop: 20 }]} onPress={onBack}>
-          <Text style={styles.primaryBtnText}>Nazad</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
+  // ── Success ─────────────────────────────────────────────────────────────────
   if (step === 'success') {
+    const successConvertedAmount = completedConversion?.convertedAmount ?? converted;
+    const successRate = completedConversion?.rate ?? activeRate;
+
     return (
       <View style={[styles.flex1, styles.center, { backgroundColor: C.bg, padding: 24 }]}>
         <Ionicons name="checkmark-circle" size={64} color={C.accent} />
         <Text style={styles.successTitle}>Konverzija uspešna!</Text>
         <Text style={styles.successSub}>Sredstva su konvertovana između računa.</Text>
         <View style={styles.card}>
-          <View style={styles.sRow}><Text style={styles.sLabel}>Sa</Text><Text style={styles.sVal}>{fromAcc.name}</Text></View>
-          <View style={styles.sRow}><Text style={styles.sLabel}>Na</Text><Text style={styles.sVal}>{toAcc.name}</Text></View>
-          <View style={styles.sRow}><Text style={styles.sLabel}>Iznos</Text><Text style={styles.sVal}>{fmt(amountNum, fromAcc.currency)}</Text></View>
-          <View style={styles.sRow}><Text style={styles.sLabel}>Dobijate</Text><Text style={[styles.sVal, { color: C.accent }]}>{fmt(converted, toAcc.currency)}</Text></View>
-          <View style={styles.sRow}><Text style={styles.sLabel}>Kurs</Text><Text style={styles.sVal}>1 {foreignCur} = {activeRate.toFixed(2)} RSD</Text></View>
+          <View style={styles.sRow}><Text style={styles.sLabel}>Sa</Text><Text style={styles.sVal}>{resolvedFrom.name}</Text></View>
+          <View style={styles.sRow}><Text style={styles.sLabel}>Na</Text><Text style={styles.sVal}>{resolvedTo.name}</Text></View>
+          <View style={styles.sRow}><Text style={styles.sLabel}>Iznos</Text><Text style={styles.sVal}>{fmt(amountNum, resolvedFrom.currency)}</Text></View>
+          <View style={styles.sRow}><Text style={styles.sLabel}>Dobijate</Text><Text style={[styles.sVal, { color: C.accent }]}>{fmt(successConvertedAmount, resolvedTo.currency)}</Text></View>
+          <View style={styles.sRow}><Text style={styles.sLabel}>Kurs</Text><Text style={styles.sVal}>1 {foreignCur} = {successRate.toFixed(2)} RSD</Text></View>
         </View>
-        <TouchableOpacity style={styles.primaryBtn} onPress={onBack}><Text style={styles.primaryBtnText}>Nazad na početnu</Text></TouchableOpacity>
+        <TouchableOpacity style={styles.primaryBtn} onPress={onBack}>
+          <Text style={styles.primaryBtnText}>Nazad na početnu</Text>
+        </TouchableOpacity>
       </View>
     );
   }
 
+  // ── Confirm ──────────────────────────────────────────────────────────────────
   if (step === 'confirm') {
     return (
       <ScrollView style={styles.screenScroll} contentContainerStyle={{ padding: 20 }}>
         <View style={styles.hRow}>
-          <TouchableOpacity onPress={() => setStep('convert')} style={styles.backBtn}><Ionicons name="chevron-back" size={20} color={C.textSecondary} /></TouchableOpacity>
+          <TouchableOpacity onPress={() => setStep('convert')} style={styles.backBtn}>
+            <Ionicons name="chevron-back" size={20} color={C.textSecondary} />
+          </TouchableOpacity>
           <Text style={styles.title}>Potvrda konverzije</Text>
         </View>
         <View style={styles.confirmCard}>
           {[
-            ['Sa računa', `${fromAcc.name} (${fromAcc.currency})`],
-            ['Na račun', `${toAcc.name} (${toAcc.currency})`],
-            ['Iznos', fmt(amountNum, fromAcc.currency)],
-            ['Dobijate', fmt(converted, toAcc.currency)],
-            ['Kurs', `1 ${foreignCur} = ${activeRate.toFixed(4)} RSD`],
+            ['Sa računa', `${resolvedFrom.name} (${resolvedFrom.currency})`],
+            ['Na račun',  `${resolvedTo.name} (${resolvedTo.currency})`],
+            ['Iznos',     fmt(amountNum, resolvedFrom.currency)],
+            ['Dobijate',  fmt(converted, resolvedTo.currency)],
+            ['Kurs',      `1 ${foreignCur} = ${activeRate.toFixed(4)} RSD`],
           ].map(([l, v], i) => (
             <View key={l} style={[styles.cRow, i > 0 && { borderTopWidth: 1, borderTopColor: C.border }]}>
-              <Text style={styles.cLabel}>{l}</Text><Text style={styles.cVal}>{v}</Text>
+              <Text style={styles.cLabel}>{l}</Text>
+              <Text style={styles.cVal}>{v}</Text>
             </View>
           ))}
         </View>
         <View style={{ flexDirection: 'row', gap: 12 }}>
-          <TouchableOpacity style={styles.secBtn} onPress={() => setStep('convert')}><Text style={styles.secBtnText}>Nazad</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.secBtn} onPress={() => setStep('convert')}>
+            <Text style={styles.secBtnText}>Nazad</Text>
+          </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.primaryBtn, { flex: 1.5, opacity: isValid ? 1 : 0.5 }]}
-            disabled={!isValid}
-            onPress={() => setStep('success')}
+            style={[styles.primaryBtn, { flex: 1.5, opacity: isValid && !submitting ? 1 : 0.5 }]}
+            disabled={!isValid || submitting}
+            onPress={handleConfirm}
           >
-            <Text style={styles.primaryBtnText}>Potvrdi</Text>
+            {submitting
+              ? <ActivityIndicator color="#fff" />
+              : <Text style={styles.primaryBtnText}>Potvrdi</Text>
+            }
           </TouchableOpacity>
         </View>
       </ScrollView>
     );
   }
 
+  // ── Convert form ─────────────────────────────────────────────────────────────
   if (step === 'convert') {
     return (
       <ScrollView style={styles.screenScroll} contentContainerStyle={{ padding: 20 }}>
         <View style={styles.hRow}>
-          <TouchableOpacity onPress={() => setStep('rates')} style={styles.backBtn}><Ionicons name="chevron-back" size={20} color={C.textSecondary} /></TouchableOpacity>
+          <TouchableOpacity onPress={() => setStep('rates')} style={styles.backBtn}>
+            <Ionicons name="chevron-back" size={20} color={C.textSecondary} />
+          </TouchableOpacity>
           <Text style={styles.title}>Konverzija</Text>
         </View>
 
         <Text style={styles.label}>SA RAČUNA</Text>
         <TouchableOpacity style={styles.accSel} onPress={() => setShowFrom(true)}>
           <Ionicons name="wallet" size={18} color={C.primary} />
-          <View style={styles.flex1}><Text style={styles.accSelName}>{fromAcc.name} ({fromAcc.currency})</Text><Text style={styles.accSelBal}>{fmt(fromAcc.available, fromAcc.currency)}</Text></View>
+          <View style={styles.flex1}>
+            <Text style={styles.accSelName}>{resolvedFrom.name} ({resolvedFrom.currency})</Text>
+            <Text style={styles.accSelBal}>{fmt(resolvedFrom.availableBalance, resolvedFrom.currency)}</Text>
+          </View>
           <Ionicons name="chevron-down" size={18} color={C.textMuted} />
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.swapBtn} onPress={handleSwap}><Ionicons name="swap-vertical" size={22} color={C.primary} /></TouchableOpacity>
+        <TouchableOpacity style={styles.swapBtn} onPress={handleSwap}>
+          <Ionicons name="swap-vertical" size={22} color={C.primary} />
+        </TouchableOpacity>
 
         <Text style={styles.label}>NA RAČUN</Text>
         <TouchableOpacity style={styles.accSel} onPress={() => setShowTo(true)}>
           <Ionicons name="wallet" size={18} color={C.accent} />
-          <View style={styles.flex1}><Text style={styles.accSelName}>{toAcc.name} ({toAcc.currency})</Text><Text style={styles.accSelBal}>{fmt(toAcc.available, toAcc.currency)}</Text></View>
+          <View style={styles.flex1}>
+            <Text style={styles.accSelName}>{resolvedTo.name} ({resolvedTo.currency})</Text>
+            <Text style={styles.accSelBal}>{fmt(resolvedTo.availableBalance, resolvedTo.currency)}</Text>
+          </View>
           <Ionicons name="chevron-down" size={18} color={C.textMuted} />
         </TouchableOpacity>
 
-        <Text style={[styles.label, { marginTop: 20 }]}>IZNOS ({fromAcc.currency})</Text>
+        <Text style={[styles.label, { marginTop: 20 }]}>IZNOS ({resolvedFrom.currency})</Text>
         <View style={styles.inputWrap}>
           <TextInput
             style={styles.input}
@@ -242,18 +254,18 @@ export default function ExchangeScreen({ onBack }: Props) {
             placeholderTextColor={C.textMuted}
             keyboardType="decimal-pad"
           />
-          <Text style={styles.cur}>{fromAcc.currency}</Text>
+          <Text style={styles.cur}>{resolvedFrom.currency}</Text>
         </View>
 
-        {!!validationMessage && (
-          <Text style={styles.errorText}>{validationMessage}</Text>
-        )}
+        {!!validationMessage && <Text style={styles.errorText}>{validationMessage}</Text>}
 
         {isValid && (
           <View style={styles.previewCard}>
             <Text style={styles.previewLabel}>Dobijate približno</Text>
-            <Text style={styles.previewAmount}>{fmt(converted, toAcc.currency)}</Text>
-            <Text style={styles.previewRate}>Kurs: 1 {foreignCur} = {activeRate.toFixed(2)} RSD ({buying ? 'prodajni' : 'kupovni'})</Text>
+            <Text style={styles.previewAmount}>{fmt(converted, resolvedTo.currency)}</Text>
+            <Text style={styles.previewRate}>
+              Kurs: 1 {foreignCur} = {activeRate.toFixed(2)} RSD ({buying ? 'prodajni' : 'kupovni'})
+            </Text>
           </View>
         )}
 
@@ -265,27 +277,44 @@ export default function ExchangeScreen({ onBack }: Props) {
           <Text style={styles.primaryBtnText}>Nastavi</Text>
         </TouchableOpacity>
 
-        {[{ v: showFrom, sv: setShowFrom, set: setFromAcc, accs: fromPickerAccounts }, { v: showTo, sv: setShowTo, set: setToAcc, accs: toPickerAccounts }].map((p, i) => (
-          <Modal key={i} visible={p.v} transparent animationType="slide">
-            <View style={styles.mOverlay}><View style={styles.mSheet}>
-              <View style={styles.mHead}><Text style={styles.mTitle}>Odaberite račun</Text><TouchableOpacity onPress={() => p.sv(false)}><Ionicons name="close" size={24} color={C.textSecondary} /></TouchableOpacity></View>
-              {p.accs.map(a => (
-                <TouchableOpacity key={a.id} style={styles.mItem} onPress={() => { p.set(a); p.sv(false); }}>
-                  <View style={styles.mItemIcon}><Ionicons name="wallet" size={18} color={C.primary} /></View>
-                  <View style={styles.flex1}><Text style={styles.mItemTitle}>{a.name} ({a.currency})</Text><Text style={styles.mItemSub}>{fmt(a.available, a.currency)}</Text></View>
-                </TouchableOpacity>
-              ))}
-            </View></View>
+        {/* Account pickers */}
+        {[
+          { visible: showFrom, setVisible: setShowFrom, setAcc: setFromAcc, accs: fromPickerAccounts },
+          { visible: showTo,   setVisible: setShowTo,   setAcc: setToAcc,   accs: toPickerAccounts  },
+        ].map((p, i) => (
+          <Modal key={i} visible={p.visible} transparent animationType="slide">
+            <View style={styles.mOverlay}>
+              <View style={styles.mSheet}>
+                <View style={styles.mHead}>
+                  <Text style={styles.mTitle}>Odaberite račun</Text>
+                  <TouchableOpacity onPress={() => p.setVisible(false)}>
+                    <Ionicons name="close" size={24} color={C.textSecondary} />
+                  </TouchableOpacity>
+                </View>
+                {p.accs.map(a => (
+                  <TouchableOpacity key={a.accountNumber} style={styles.mItem} onPress={() => { p.setAcc(a); p.setVisible(false); }}>
+                    <View style={styles.mItemIcon}><Ionicons name="wallet" size={18} color={C.primary} /></View>
+                    <View style={styles.flex1}>
+                      <Text style={styles.mItemTitle}>{a.name} ({a.currency})</Text>
+                      <Text style={styles.mItemSub}>{fmt(a.availableBalance, a.currency)}</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
           </Modal>
         ))}
       </ScrollView>
     );
   }
 
+  // ── Rates list ───────────────────────────────────────────────────────────────
   return (
     <ScrollView style={styles.screenScroll} contentContainerStyle={{ padding: 20 }}>
       <View style={styles.hRow}>
-        <TouchableOpacity onPress={onBack} style={styles.backBtn}><Ionicons name="chevron-back" size={20} color={C.textSecondary} /></TouchableOpacity>
+        <TouchableOpacity onPress={onBack} style={styles.backBtn}>
+          <Ionicons name="chevron-back" size={20} color={C.textSecondary} />
+        </TouchableOpacity>
         <Text style={styles.title}>Menjačnica</Text>
       </View>
 
@@ -344,7 +373,6 @@ const styles = StyleSheet.create({
   flagText: { color: C.primary, fontSize: 10, fontWeight: '700' },
   rateCur: { color: C.textPrimary, fontSize: 13, fontWeight: '500' },
   rateVal: { color: C.textPrimary, fontSize: 13, fontWeight: '600' },
-
   accSel: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: C.bgInput, borderRadius: 14, borderWidth: 1.5, borderColor: C.border, padding: 14 },
   accSelName: { color: C.textPrimary, fontSize: 14, fontWeight: '500' },
   accSelBal: { color: C.textMuted, fontSize: 12, marginTop: 2 },
@@ -357,7 +385,6 @@ const styles = StyleSheet.create({
   previewAmount: { color: C.accent, fontSize: 24, fontWeight: '800', marginTop: 4, letterSpacing: -0.5 },
   previewRate: { color: C.textMuted, fontSize: 11, marginTop: 6 },
   errorText: { color: '#ff6b6b', fontSize: 12, marginTop: 8 },
-
   primaryBtn: { backgroundColor: C.primary, borderRadius: 14, padding: 16, alignItems: 'center', shadowColor: C.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 12, elevation: 6 },
   primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   secBtn: { flex: 1, backgroundColor: C.bgCard, borderRadius: 14, padding: 16, alignItems: 'center', borderWidth: 1, borderColor: C.border },
