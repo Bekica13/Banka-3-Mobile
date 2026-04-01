@@ -1,4 +1,3 @@
-
 import { API_CONFIG, apiClient } from '../network/NetworkClient';
 
 import type { IAuthRepository } from '../../features/auth/domain/IAuthRepository';
@@ -18,6 +17,8 @@ import { MockCardRepository } from '../../features/cards/data/MockCardRepository
 import { MockLoanRepository } from '../../features/loans/data/MockLoanRepository';
 
 import { AuthRepository } from '../../features/auth/data/AuthRepository';
+import { AccountRepository } from '../../features/accounts/data/AccountRepository';
+import { ExchangeRepository } from '../../features/exchange/data/ExchangeRepository';
 
 class Container {
   private _authRepository?: IAuthRepository;
@@ -39,7 +40,9 @@ class Container {
 
   get accountRepository(): IAccountRepository {
     if (!this._accountRepository) {
-      this._accountRepository = new MockAccountRepository();
+      this._accountRepository = API_CONFIG.USE_MOCK
+        ? new MockAccountRepository()
+        : new AccountRepository(apiClient);
     }
     return this._accountRepository;
   }
@@ -60,7 +63,9 @@ class Container {
 
   get exchangeRepository(): IExchangeRepository {
     if (!this._exchangeRepository) {
-      this._exchangeRepository = new MockExchangeRepository();
+      this._exchangeRepository = API_CONFIG.USE_MOCK
+        ? new MockExchangeRepository()
+        : new ExchangeRepository(apiClient);
     }
     return this._exchangeRepository;
   }

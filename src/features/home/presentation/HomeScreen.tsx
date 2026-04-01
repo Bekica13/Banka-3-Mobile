@@ -1,9 +1,10 @@
 import React from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { C } from '../../../shared/constants/theme';
-import { MOCK_USER, MOCK_ACCOUNTS, MOCK_TRANSACTIONS } from '../../../shared/data/mockData';
+import { MOCK_USER } from '../../../shared/data/mockData';
 import { fmt } from '../../../shared/utils/formatters';
+import { useAccounts, useTransactions } from '../../../shared/hooks/useFeatures';
 
 interface Props {
   hasNotif: boolean;
@@ -13,15 +14,17 @@ interface Props {
 }
 
 export default function HomeScreen({ hasNotif, onOpenAccount, onShowAllAccounts, onNavigate }: Props) {
-  const main = MOCK_ACCOUNTS[0];
-  const txs = MOCK_TRANSACTIONS.filter(t => t.accountId === main.id).slice(0, 5);
+  const { state: accountsState } = useAccounts();
+  const accounts = accountsState.data ?? [];
+  const main = accounts[0];
+  const { state: transactionsState } = useTransactions(main?.id ?? 0);
+  const transactions = (transactionsState.data ?? []).slice(0, 5);
 
   return (
     <ScrollView style={styles.flex1} contentContainerStyle={{ padding: 20, paddingBottom: 20 }} showsVerticalScrollIndicator={false}>
-      {/* Header */}
       <View style={styles.header}>
         <View>
-          <Text style={styles.greeting}>Dobro došli</Text>
+          <Text style={styles.greeting}>Dobro dosli</Text>
           <Text style={styles.name}>{MOCK_USER.firstName} {MOCK_USER.lastName}</Text>
         </View>
         <TouchableOpacity style={styles.bellWrap} onPress={() => onNavigate('verify')}>
@@ -30,52 +33,51 @@ export default function HomeScreen({ hasNotif, onOpenAccount, onShowAllAccounts,
         </TouchableOpacity>
       </View>
 
-      {/* Balance Card */}
-      <View style={styles.balanceCard}>
-        <View style={styles.circle1} />
-        <View style={styles.circle2} />
-        <Text style={styles.balanceLabel}>Ukupno stanje</Text>
-        <Text style={styles.balanceAmount}>{fmt(main.balance)}</Text>
-        <Text style={styles.balanceAvail}>Raspoloživo: {fmt(main.available)}</Text>
+      {main && (
+        <View style={styles.balanceCard}>
+          <View style={styles.circle1} />
+          <View style={styles.circle2} />
+          <Text style={styles.balanceLabel}>Ukupno stanje</Text>
+          <Text style={styles.balanceAmount}>{fmt(main.balance, main.currency)}</Text>
+          <Text style={styles.balanceAvail}>Raspolozivo: {fmt(main.availableBalance, main.currency)}</Text>
 
-        <View style={styles.quickRow}>
-          {[
-            { icon: 'arrow-up' as const, label: 'Uplata', target: 'deposit' },
-            { icon: 'send' as const, label: 'Plaćanje', target: 'payment' },
-            { icon: 'swap-horizontal' as const, label: 'Prenos', target: 'transfer' },
-          ].map(({ icon, label, target }) => (
-            <TouchableOpacity key={label} style={styles.quickBtn} activeOpacity={0.7} onPress={() => onNavigate(target)}>
-              <Ionicons name={icon} size={18} color="#fff" />
-              <Text style={styles.quickLabel}>{label}</Text>
-            </TouchableOpacity>
-          ))}
+          <View style={styles.quickRow}>
+            {[
+              { icon: 'arrow-up' as const, label: 'Uplata', target: 'deposit' },
+              { icon: 'send' as const, label: 'Placanje', target: 'payment' },
+              { icon: 'swap-horizontal' as const, label: 'Prenos', target: 'transfer' },
+            ].map(({ icon, label, target }) => (
+              <TouchableOpacity key={label} style={styles.quickBtn} activeOpacity={0.7} onPress={() => onNavigate(target)}>
+                <Ionicons name={icon} size={18} color="#fff" />
+                <Text style={styles.quickLabel}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
-      </View>
+      )}
 
-      {/* Account carousel */}
       <View style={styles.sectionRow}>
-        <Text style={styles.sectionTitle}>Moji računi</Text>
-        <TouchableOpacity onPress={onShowAllAccounts}><Text style={styles.sectionLink}>Prikaži sve</Text></TouchableOpacity>
+        <Text style={styles.sectionTitle}>Moji racuni</Text>
+        <TouchableOpacity onPress={onShowAllAccounts}><Text style={styles.sectionLink}>Prikazi sve</Text></TouchableOpacity>
       </View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 24 }}>
-        {MOCK_ACCOUNTS.map(acc => (
-          <TouchableOpacity key={acc.id} style={styles.pill} onPress={() => onOpenAccount(acc.id)} activeOpacity={0.7}>
-            <Text style={styles.pillName}>{acc.name}</Text>
-            <Text style={styles.pillBal}>{fmt(acc.balance, acc.currency)}</Text>
+        {accounts.map(account => (
+          <TouchableOpacity key={`${account.id}-${account.accountNumber}`} style={styles.pill} onPress={() => onOpenAccount(account.id)} activeOpacity={0.7}>
+            <Text style={styles.pillName}>{account.name}</Text>
+            <Text style={styles.pillBal}>{fmt(account.balance, account.currency)}</Text>
           </TouchableOpacity>
         ))}
       </ScrollView>
 
-      {/* Quick menu grid */}
       <View style={styles.sectionRow}>
         <Text style={styles.sectionTitle}>Brzi pristup</Text>
       </View>
       <View style={styles.menuGrid}>
         {[
           { icon: 'card-outline' as const, label: 'Kartice', target: 'cards' },
-          { icon: 'swap-horizontal-outline' as const, label: 'Menjačnica', target: 'exchange' },
+          { icon: 'swap-horizontal-outline' as const, label: 'Menjacnica', target: 'exchange' },
           { icon: 'cash-outline' as const, label: 'Krediti', target: 'loans' },
-          { icon: 'receipt-outline' as const, label: 'Plaćanja', target: 'paymentHistory' },
+          { icon: 'receipt-outline' as const, label: 'Placanja', target: 'paymentHistory' },
           { icon: 'people-outline' as const, label: 'Primaoci', target: 'recipients' },
           { icon: 'shield-checkmark-outline' as const, label: 'Verifikacija', target: 'verify' },
         ].map(({ icon, label, target }) => (
@@ -88,20 +90,22 @@ export default function HomeScreen({ hasNotif, onOpenAccount, onShowAllAccounts,
         ))}
       </View>
 
-      {/* Transactions */}
       <View style={[styles.sectionRow, { marginTop: 24 }]}>
         <Text style={styles.sectionTitle}>Poslednje transakcije</Text>
       </View>
-      {txs.map(tx => (
-        <View key={tx.id} style={styles.txRow}>
-          <View style={[styles.txIcon, { backgroundColor: tx.amount > 0 ? C.accentGlow : C.dangerGlow }]}>
-            <Ionicons name={tx.amount > 0 ? 'arrow-down' : 'arrow-up'} size={18} color={tx.amount > 0 ? C.accent : C.danger} />
+      {transactions.map(transaction => (
+        <View key={`${transaction.id}-${transaction.accountId}-${transaction.date}-${transaction.amount}`} style={styles.txRow}>
+          <View style={[styles.txIcon, { backgroundColor: transaction.amount > 0 ? C.accentGlow : C.dangerGlow }]}>
+            <Ionicons name={transaction.amount > 0 ? 'arrow-down' : 'arrow-up'} size={18} color={transaction.amount > 0 ? C.accent : C.danger} />
           </View>
           <View style={styles.flex1}>
-            <Text style={styles.txDesc} numberOfLines={1}>{tx.desc}</Text>
-            <Text style={styles.txDate}>{tx.date}</Text>
+            <Text style={styles.txDesc} numberOfLines={1}>{transaction.description}</Text>
+            <Text style={styles.txDate}>{transaction.date}</Text>
           </View>
-          <Text style={[styles.txAmt, tx.amount > 0 && { color: C.accent }]}>{tx.amount > 0 ? '+' : ''}{fmt(tx.amount)}</Text>
+          <Text style={[styles.txAmt, transaction.amount > 0 && { color: C.accent }]}>
+            {transaction.amount > 0 ? '+' : ''}
+            {fmt(transaction.amount, transaction.currency)}
+          </Text>
         </View>
       ))}
     </ScrollView>

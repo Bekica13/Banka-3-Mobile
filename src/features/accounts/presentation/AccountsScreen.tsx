@@ -1,9 +1,9 @@
 import React from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Platform, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { C } from '../../../shared/constants/theme';
-import { MOCK_ACCOUNTS, MOCK_TRANSACTIONS } from '../../../shared/data/mockData';
 import { fmt } from '../../../shared/utils/formatters';
+import { useAccounts, useTransactions } from '../../../shared/hooks/useFeatures';
 
 interface Props {
   detailId: number | null;
@@ -12,46 +12,81 @@ interface Props {
 }
 
 export default function AccountsScreen({ detailId, onSelect, onBack }: Props) {
+  const { state: accountsState } = useAccounts();
+  const { state: transactionsState } = useTransactions(detailId ?? 0);
+
+  if (accountsState.loading) {
+    return (
+      <View style={[styles.flex1, styles.center]}>
+        <ActivityIndicator color={C.primary} size="large" />
+      </View>
+    );
+  }
+
+  if (accountsState.error) {
+    return (
+      <View style={[styles.flex1, styles.center, { padding: 24 }]}>
+        <Text style={styles.subtitle}>{accountsState.error}</Text>
+      </View>
+    );
+  }
+
+  const accounts = accountsState.data ?? [];
+
   if (detailId) {
-    const acc = MOCK_ACCOUNTS.find(a => a.id === detailId)!;
-    const txs = MOCK_TRANSACTIONS.filter(t => t.accountId === detailId);
+    const account = accounts.find(item => item.id === detailId);
+    const transactions = detailId ? (transactionsState.data ?? []) : [];
+
+    if (!account) {
+      return (
+        <View style={[styles.flex1, styles.center, { padding: 24 }]}>
+          <Text style={styles.subtitle}>Racun nije pronadjen.</Text>
+        </View>
+      );
+    }
+
     return (
       <ScrollView style={styles.flex1} contentContainerStyle={{ padding: 20 }} showsVerticalScrollIndicator={false}>
         <View style={styles.row}>
           <TouchableOpacity onPress={onBack} style={styles.backBtn}>
             <Ionicons name="chevron-back" size={20} color={C.textSecondary} />
           </TouchableOpacity>
-          <Text style={styles.title}>{acc.name}</Text>
+          <Text style={styles.title}>{account.name}</Text>
         </View>
 
         <View style={styles.detailCard}>
-          <Text style={styles.detailNum}>{acc.number}</Text>
-          <Text style={styles.detailBal}>{fmt(acc.balance, acc.currency)}</Text>
-          <View style={[styles.row, { marginTop: 16, gap: 24 }]}>  
+          <Text style={styles.detailNum}>{account.accountNumber}</Text>
+          <Text style={styles.detailBal}>{fmt(account.balance, account.currency)}</Text>
+          <View style={[styles.row, { marginTop: 16, gap: 24 }]}>
             <View>
-              <Text style={styles.detailLabel}>Raspoloživo</Text>
-              <Text style={[styles.detailVal, { color: C.accent }]}>{fmt(acc.available, acc.currency)}</Text>
+              <Text style={styles.detailLabel}>Raspolozivo</Text>
+              <Text style={[styles.detailVal, { color: C.accent }]}>{fmt(account.availableBalance, account.currency)}</Text>
             </View>
             <View>
               <Text style={styles.detailLabel}>Rezervisano</Text>
-              <Text style={[styles.detailVal, { color: C.warning }]}>{fmt(acc.balance - acc.available, acc.currency)}</Text>
+              <Text style={[styles.detailVal, { color: C.warning }]}>{fmt(account.reservedAmount, account.currency)}</Text>
             </View>
           </View>
         </View>
 
         <Text style={[styles.sectionTitle, { marginTop: 24, marginBottom: 14 }]}>Transakcije</Text>
-        {txs.length === 0 ? (
+        {transactionsState.loading ? (
+          <ActivityIndicator color={C.primary} />
+        ) : transactions.length === 0 ? (
           <Text style={{ color: C.textMuted, textAlign: 'center', padding: 40 }}>Nema transakcija</Text>
-        ) : txs.map(tx => (
-          <View key={tx.id} style={styles.txRow}>
-            <View style={[styles.txIcon, { backgroundColor: tx.amount > 0 ? C.accentGlow : C.dangerGlow }]}>
-              <Ionicons name={tx.amount > 0 ? 'arrow-down' : 'arrow-up'} size={18} color={tx.amount > 0 ? C.accent : C.danger} />
+        ) : transactions.map(transaction => (
+          <View key={`${transaction.id}-${transaction.accountId}-${transaction.date}-${transaction.amount}`} style={styles.txRow}>
+            <View style={[styles.txIcon, { backgroundColor: transaction.amount > 0 ? C.accentGlow : C.dangerGlow }]}>
+              <Ionicons name={transaction.amount > 0 ? 'arrow-down' : 'arrow-up'} size={18} color={transaction.amount > 0 ? C.accent : C.danger} />
             </View>
             <View style={styles.flex1}>
-              <Text style={styles.txDesc} numberOfLines={1}>{tx.desc}</Text>
-              <Text style={styles.txDate}>{tx.date}</Text>
+              <Text style={styles.txDesc} numberOfLines={1}>{transaction.description}</Text>
+              <Text style={styles.txDate}>{transaction.date}</Text>
             </View>
-            <Text style={[styles.txAmt, tx.amount > 0 && { color: C.accent }]}>{tx.amount > 0 ? '+' : ''}{fmt(tx.amount, acc.currency)}</Text>
+            <Text style={[styles.txAmt, transaction.amount > 0 && { color: C.accent }]}>
+              {transaction.amount > 0 ? '+' : ''}
+              {fmt(transaction.amount, transaction.currency)}
+            </Text>
           </View>
         ))}
       </ScrollView>
@@ -60,17 +95,17 @@ export default function AccountsScreen({ detailId, onSelect, onBack }: Props) {
 
   return (
     <ScrollView style={styles.flex1} contentContainerStyle={{ padding: 20 }} showsVerticalScrollIndicator={false}>
-      <Text style={styles.title}>Moji računi</Text>
-      <Text style={styles.subtitle}>{MOCK_ACCOUNTS.length} aktivna računa</Text>
-      {MOCK_ACCOUNTS.map(acc => (
-        <TouchableOpacity key={acc.id} style={styles.accRow} onPress={() => onSelect(acc.id)} activeOpacity={0.7}>
+      <Text style={styles.title}>Moji racuni</Text>
+      <Text style={styles.subtitle}>{accounts.length} aktivna racuna</Text>
+      {accounts.map(account => (
+        <TouchableOpacity key={`${account.id}-${account.accountNumber}`} style={styles.accRow} onPress={() => onSelect(account.id)} activeOpacity={0.7}>
           <View style={styles.accIcon}><Ionicons name="wallet" size={22} color={C.primary} /></View>
           <View style={styles.flex1}>
-            <Text style={styles.accName}>{acc.name}</Text>
-            <Text style={styles.accNum}>{acc.number}</Text>
+            <Text style={styles.accName}>{account.name}</Text>
+            <Text style={styles.accNum}>{account.accountNumber}</Text>
           </View>
           <View style={{ alignItems: 'flex-end' }}>
-            <Text style={styles.accBal}>{fmt(acc.balance, acc.currency)}</Text>
+            <Text style={styles.accBal}>{fmt(account.balance, account.currency)}</Text>
             <Ionicons name="chevron-forward" size={14} color={C.textMuted} style={{ marginTop: 2 }} />
           </View>
         </TouchableOpacity>
@@ -81,6 +116,7 @@ export default function AccountsScreen({ detailId, onSelect, onBack }: Props) {
 
 const styles = StyleSheet.create({
   flex1: { flex: 1 },
+  center: { justifyContent: 'center', alignItems: 'center' },
   row: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
   backBtn: { width: 36, height: 36, borderRadius: 12, backgroundColor: C.bgCard, borderWidth: 1, borderColor: C.border, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
   title: { color: C.textPrimary, fontSize: 22, fontWeight: '700' },
