@@ -12,8 +12,11 @@ interface AccountApiResponse {
   ownerId?: number | string;
   owner_id?: number | string;
   name?: string;
+  account_name?: string;
   type?: string;
+  account_type?: string;
   currency?: string;
+  currency_code?: string;
   balance?: number | string;
   availableBalance?: number | string;
   available_balance?: number | string;
@@ -22,9 +25,18 @@ interface AccountApiResponse {
   status?: string;
   createdAt?: string;
   created_at?: string;
+  creation_date?: string;
   expiresAt?: string;
   expires_at?: string;
+  expiration_date?: string;
 }
+
+type AccountListApiResponse =
+  | AccountApiResponse[]
+  | {
+      value?: AccountApiResponse[];
+      data?: AccountApiResponse[];
+    };
 
 interface TransactionApiResponse {
   id?: number | string;
@@ -52,8 +64,10 @@ export class AccountRepository implements IAccountRepository {
 
   async getAccounts(): Promise<Account[]> {
     try {
-      const data = await this.client.get<AccountApiResponse[]>('/api/accounts');
-      const accounts = data.map(account => this.mapAccount(account));
+      const data = await this.client.get<AccountListApiResponse>('/api/accounts');
+      const accounts = this.getUniqueAccounts(
+        this.unwrapAccountsResponse(data).map(account => this.mapAccount(account))
+      );
       if (accounts.length > 0) {
         return accounts;
       }
@@ -91,19 +105,23 @@ export class AccountRepository implements IAccountRepository {
   }
 
   private mapAccount(account: AccountApiResponse): Account {
+    const accountNumber = account.accountNumber ?? account.account_number ?? '';
+    const fallbackId = this.getFallbackAccountId(accountNumber);
+    const normalizedStatus = (account.status ?? '').toLowerCase();
+
     return {
-      id: this.toNumber(account.id ?? account.accountId ?? account.account_id),
-      accountNumber: account.accountNumber ?? account.account_number ?? '',
+      id: this.toNumber(account.id ?? account.accountId ?? account.account_id ?? fallbackId),
+      accountNumber,
       ownerId: this.toNumber(account.ownerId ?? account.owner_id ?? 0),
-      name: account.name ?? 'Racun',
-      type: this.mapAccountType(account.type),
-      currency: account.currency ?? 'RSD',
+      name: account.name ?? account.account_name ?? 'Racun',
+      type: this.mapAccountType(account.type ?? account.account_type),
+      currency: account.currency ?? account.currency_code ?? 'RSD',
       balance: this.toNumber(account.balance),
       availableBalance: this.toNumber(account.availableBalance ?? account.available_balance ?? account.balance ?? 0),
       reservedAmount: this.toNumber(account.reservedAmount ?? account.reserved_amount ?? 0),
-      status: account.status === 'inactive' ? 'inactive' : 'active',
-      createdAt: account.createdAt ?? account.created_at ?? '',
-      expiresAt: account.expiresAt ?? account.expires_at ?? '',
+      status: normalizedStatus === 'inactive' ? 'inactive' : 'active',
+      createdAt: account.createdAt ?? account.created_at ?? account.creation_date ?? '',
+      expiresAt: account.expiresAt ?? account.expires_at ?? account.expiration_date ?? '',
     };
   }
 
@@ -124,11 +142,57 @@ export class AccountRepository implements IAccountRepository {
   }
 
   private mapAccountType(type: string | undefined): Account['type'] {
-    if (type === 'devizni' || type === 'stedni' || type === 'poslovni') {
-      return type;
+    const normalizedType = (type ?? '').toLowerCase();
+
+    if (normalizedType === 'devizni' || normalizedType === 'foreign_currency' || normalizedType === 'foreign') {
+      return 'devizni';
+    }
+
+    if (normalizedType === 'stedni' || normalizedType === 'savings') {
+      return 'stedni';
+    }
+
+    if (normalizedType === 'poslovni' || normalizedType === 'business') {
+      return 'poslovni';
     }
 
     return 'tekuci';
+  }
+
+  private unwrapAccountsResponse(response: AccountListApiResponse): AccountApiResponse[] {
+    if (Array.isArray(response)) {
+      return response;
+    }
+
+    return response.value ?? response.data ?? [];
+  }
+
+  private getUniqueAccounts(accounts: Account[]): Account[] {
+    const uniqueAccounts = new Map<string, Account>();
+
+    for (const account of accounts) {
+      const signature = [
+        account.accountNumber || 'no-account-number',
+        account.currency || 'no-currency',
+        account.name || 'no-name',
+        account.id || 0,
+      ].join('|');
+
+      if (!uniqueAccounts.has(signature)) {
+        uniqueAccounts.set(signature, account);
+      }
+    }
+
+    return Array.from(uniqueAccounts.values());
+  }
+
+  private getFallbackAccountId(accountNumber: string): number {
+    const digits = accountNumber.replace(/\D/g, '');
+    if (!digits) {
+      return 0;
+    }
+
+    return this.toNumber(digits.slice(-9));
   }
 
   private toNumber(value: number | string | undefined): number {

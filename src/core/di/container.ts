@@ -19,6 +19,7 @@ import { MockLoanRepository } from '../../features/loans/data/MockLoanRepository
 import { AuthRepository } from '../../features/auth/data/AuthRepository';
 import { AccountRepository } from '../../features/accounts/data/AccountRepository';
 import { ExchangeRepository } from '../../features/exchange/data/ExchangeRepository';
+import { VerificationRepository } from '../../features/verification/data/VerificationRepository';
 
 class Container {
   private _authRepository?: IAuthRepository;
@@ -49,7 +50,9 @@ class Container {
 
   get verificationRepository(): IVerificationRepository {
     if (!this._verificationRepository) {
-      this._verificationRepository = new MockVerificationRepository();
+      this._verificationRepository = API_CONFIG.USE_MOCK
+        ? new MockVerificationRepository()
+        : new VerificationRepository(apiClient);
     }
     return this._verificationRepository;
   }

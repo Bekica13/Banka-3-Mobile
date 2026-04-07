@@ -1,5 +1,5 @@
 import { IExchangeRepository } from '../domain/IExchangeRepository';
-import { ExchangeRate } from '../../../shared/types/models';
+import { Account, ExchangeRate } from '../../../shared/types/models';
 import { applyMockExchangeTransfer } from '../../accounts/data/mockAccountStore';
 
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -56,6 +56,21 @@ export class MockExchangeRepository implements IExchangeRepository {
       convertedAmount,
       rate: usedRate,
     };
+  }
+
+  async executeConversion(
+    fromAccount: Account,
+    toAccount: Account,
+    amount: number,
+    verificationCode?: string
+  ) {
+    return this.convert(
+      fromAccount.id,
+      toAccount.id,
+      fromAccount.currency,
+      toAccount.currency,
+      amount
+    );
   }
 
   private roundToTwo(value: number): number {

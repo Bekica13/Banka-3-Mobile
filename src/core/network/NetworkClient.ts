@@ -1,7 +1,7 @@
 import { tokenStorage } from '../storage/tokenStorage';
 
 export const API_CONFIG = {
-  BASE_URL: process.env.EXPO_PUBLIC_API_BASE_URL || 'http://192.168.1.102:8080',
+  BASE_URL: process.env.EXPO_PUBLIC_API_BASE_URL || 'http://192.168.0.24:8080',
   USE_MOCK: false,  // Connected to real backend
 
   TIMEOUT: 10000,
@@ -14,6 +14,12 @@ export class ApiError extends Error {
   }
 }
 
+interface RequestOptions {
+  headers?: Record<string, string>;
+  skipAuth?: boolean;
+  retryOnUnauthorized?: boolean;
+}
+
 export class NetworkClient {
   private baseUrl: string;
   private isRefreshing = false;
@@ -23,9 +29,10 @@ export class NetworkClient {
     this.baseUrl = baseUrl;
   }
 
-  private async getHeaders(skipAuth = false): Promise<Record<string, string>> {
+  private async getHeaders(skipAuth = false, extraHeaders?: Record<string, string>): Promise<Record<string, string>> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      ...extraHeaders,
     };
     if (!skipAuth) {
       const token = await tokenStorage.getAccessToken();
@@ -36,25 +43,36 @@ export class NetworkClient {
     return headers;
   }
 
-  async get<T>(path: string): Promise<T> {
-    return this.request<T>('GET', path);
+  async get<T>(path: string, options?: RequestOptions): Promise<T> {
+    return this.request<T>('GET', path, undefined, options);
   }
 
-  async post<T>(path: string, body?: unknown): Promise<T> {
-    return this.request<T>('POST', path, body);
+  async post<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> {
+    return this.request<T>('POST', path, body, options);
   }
 
-  async put<T>(path: string, body?: unknown): Promise<T> {
-    return this.request<T>('PUT', path, body);
+  async put<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> {
+    return this.request<T>('PUT', path, body, options);
   }
 
-  async delete<T>(path: string): Promise<T> {
-    return this.request<T>('DELETE', path);
+  async delete<T>(path: string, options?: RequestOptions): Promise<T> {
+    return this.request<T>('DELETE', path, undefined, options);
   }
 
-  private async request<T>(method: string, path: string, body?: unknown, retry = true): Promise<T> {
-    const headers = await this.getHeaders();
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    options?: RequestOptions,
+    retry = true
+  ): Promise<T> {
+    const headers = await this.getHeaders(options?.skipAuth, options?.headers);
     let response: Response;
+    const isTransferRequest = path.includes('/api/transactions/transfer');
+    const isExchangeRequest =
+      path.includes('/api/exchange/convert') ||
+      path.includes('/api/exchange-rates/convert') ||
+      path.includes('/api/convert');
 
     try {
       response = await fetch(`${this.baseUrl}${path}`, {
@@ -67,12 +85,14 @@ export class NetworkClient {
     }
 
     // 401 Try token refresh 
-    if (response.status === 401 && retry) {
+    const retryOnUnauthorized = options?.retryOnUnauthorized ?? !(isTransferRequest || isExchangeRequest);
+
+    if (response.status === 401 && retry && retryOnUnauthorized) {
       try {
         const newToken = await this.handleTokenRefresh();
         if (newToken) {
           // Retry the original request with new token
-          return this.request<T>(method, path, body, false);
+          return this.request<T>(method, path, body, options, false);
         }
       } catch (e) {
         // Refresh failed — user needs to re-login
