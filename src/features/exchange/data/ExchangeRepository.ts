@@ -1,5 +1,5 @@
 import { IExchangeRepository } from '../domain/IExchangeRepository';
-import { ExchangeRate } from '../../../shared/types/models';
+import { Account, ExchangeRate } from '../../../shared/types/models';
 import { ApiError, NetworkClient } from '../../../core/network/NetworkClient';
 import { MockExchangeRepository } from './MockExchangeRepository';
 
@@ -73,9 +73,15 @@ export class ExchangeRepository implements IExchangeRepository {
 
     for (const endpoint of endpoints) {
       try {
-        const response = await this.client.post<ConvertApiResponse>(endpoint, payload);
+        const response = await this.client.post<ConvertApiResponse>(endpoint, payload, {
+          retryOnUnauthorized: false,
+        });
         return this.mapConversion(response);
       } catch (error) {
+        if (error instanceof ApiError && error.statusCode === 401) {
+          throw new Error('Potrebna je nova prijava ili backend odbija preview konverzije.');
+        }
+
         if (!this.shouldTryNextEndpoint(error)) {
           throw error;
         }
@@ -91,6 +97,76 @@ export class ExchangeRepository implements IExchangeRepository {
 
       return this.fallbackRepository.convert(fromAccountId, toAccountId, fromCurrency, toCurrency, amount);
     }
+  }
+
+  async executeConversion(
+    fromAccount: Account,
+    toAccount: Account,
+    amount: number,
+    verificationCode?: string
+  ) {
+    const preview = await this.convert(
+      fromAccount.id,
+      toAccount.id,
+      fromAccount.currency,
+      toAccount.currency,
+      amount
+    );
+
+    const payload = {
+      from_account: fromAccount.accountNumber || String(fromAccount.id),
+      to_account: toAccount.accountNumber || String(toAccount.id),
+      amount,
+      description: `exchange ${amount} ${fromAccount.currency} to ${toAccount.currency}`,
+      converted_amount: preview.convertedAmount,
+      exchange_rate: preview.rate,
+      from_currency: fromAccount.currency,
+      to_currency: toAccount.currency,
+      fromAccountId: fromAccount.id,
+      toAccountId: toAccount.id,
+      from_account_id: fromAccount.id,
+      to_account_id: toAccount.id,
+    };
+
+    const endpoints = [
+      '/api/transactions/transfer/',
+      '/api/transactions/transfer',
+    ];
+
+    const trimmedCode = verificationCode?.trim();
+    const requestHeaders = trimmedCode ? { TOTP: trimmedCode } : undefined;
+
+    for (const endpoint of endpoints) {
+      try {
+        await this.client.post(endpoint, payload, {
+          headers: requestHeaders,
+          retryOnUnauthorized: false,
+        });
+        return preview;
+      } catch (error) {
+        if (error instanceof ApiError && error.statusCode === 401) {
+          const normalizedMessage = error.message.toLowerCase();
+
+          if (normalizedMessage.includes("doesn't have totp setup") || normalizedMessage.includes('does not have totp setup')) {
+            throw new Error('Korisnik nema aktiviran jednokratni kod za potvrdu transakcije.');
+          }
+
+          if (normalizedMessage.includes('invalid') || normalizedMessage.includes('wrong code')) {
+            throw new Error('Jednokratni kod nije ispravan.');
+          }
+
+          throw new Error(trimmedCode
+            ? 'Jednokratni kod nije prihvaćen za potvrdu transakcije.'
+            : 'Unesite jednokratni kod za potvrdu transakcije.');
+        }
+
+        if (!this.shouldTryNextEndpoint(error)) {
+          throw error;
+        }
+      }
+    }
+
+    throw new Error('Neuspešno izvršenje menjačke transakcije.');
   }
 
   private async tryGetRates(): Promise<ExchangeRateApiResponse[]> {

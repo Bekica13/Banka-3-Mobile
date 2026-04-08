@@ -10,6 +10,32 @@ import { Account } from '../../../shared/types/models';
 
 interface Props { onBack: () => void; }
 
+type VerificationStepId = 'request' | 'pending' | 'code' | 'confirm';
+type VerificationStepState = 'pending' | 'active' | 'completed' | 'error';
+
+const VERIFICATION_STEPS: Array<{ id: VerificationStepId; title: string; description: string }> = [
+  {
+    id: 'request',
+    title: 'Request',
+    description: 'Kreiranje verification zahteva za konverziju.',
+  },
+  {
+    id: 'pending',
+    title: 'Pending',
+    description: 'Preuzimanje aktivnog verification zahteva.',
+  },
+  {
+    id: 'code',
+    title: 'Code',
+    description: 'Generisanje jednokratnog koda za potvrdu.',
+  },
+  {
+    id: 'confirm',
+    title: 'Confirm',
+    description: 'Slanje koda i izvršenje transakcije.',
+  },
+];
+
 export default function ExchangeScreen({ onBack }: Props) {
   const { state: accountsState, refresh: refreshAccounts } = useAccounts();
   const { state: ratesState } = useExchangeRates();
@@ -27,6 +53,9 @@ export default function ExchangeScreen({ onBack }: Props) {
   const [showFrom, setShowFrom] = useState(false);
   const [showTo, setShowTo]     = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
+  const [verificationStatus, setVerificationStatus] = useState('');
+  const [verificationStep, setVerificationStep] = useState<VerificationStepId | null>(null);
   const [completedConversion, setCompletedConversion] = useState<{ convertedAmount: number; rate: number } | null>(null);
 
   // Pick defaults once accounts load
@@ -71,8 +100,16 @@ export default function ExchangeScreen({ onBack }: Props) {
     return buying ? amountNum / activeRate : amountNum * activeRate;
   }, [amountNum, activeRate, buying, isValid]);
 
+  const resolveCompletedAmount = (value: unknown, fallback: number) => {
+    const parsed = typeof value === 'string' ? parseFloat(value) : value;
+    return Number.isFinite(parsed) ? Number(parsed) : fallback;
+  };
+
   const handleSwap = () => {
     const prev = resolvedFrom;
+    setSubmitError('');
+    setVerificationStep(null);
+    setVerificationStatus('');
     setFromAcc(resolvedTo);
     setToAcc(prev);
   };
@@ -80,28 +117,135 @@ export default function ExchangeScreen({ onBack }: Props) {
   const handleAmountChange = (text: string) => {
     const normalized = text.replace(/,/g, '.').replace(/[^0-9.]/g, '');
     const parts = normalized.split('.');
+    setSubmitError('');
+    setVerificationStep(null);
+    setVerificationStatus('');
     setAmount(parts.length <= 2 ? normalized : `${parts[0]}.${parts.slice(1).join('')}`);
   };
 
   const handleConfirm = async () => {
     if (!isValid || !resolvedFrom || !resolvedTo) return;
+
     setSubmitting(true);
+    setSubmitError('');
+    setVerificationStatus('');
     try {
-      const result = await container.exchangeRepository.convert(
+      setVerificationStep('request');
+      setVerificationStatus('Kreiram verification zahtev...');
+      const preview = await container.exchangeRepository.convert(
         resolvedFrom.id,
         resolvedTo.id,
         resolvedFrom.currency,
         resolvedTo.currency,
         amountNum,
       );
-      setCompletedConversion(result);
+
+      const verificationPayload = {
+        from_account: resolvedFrom.accountNumber,
+        to_account: resolvedTo.accountNumber,
+        amount: amountNum,
+        description: `exchange ${amountNum} ${resolvedFrom.currency} to ${resolvedTo.currency}`,
+        from_currency: resolvedFrom.currency,
+        to_currency: resolvedTo.currency,
+        converted_amount: preview.convertedAmount,
+        exchange_rate: preview.rate,
+      };
+
+      const verificationRequest = await container.verificationRepository.createVerificationRequest(
+        'exchange',
+        verificationPayload,
+      );
+      setVerificationStep('pending');
+      setVerificationStatus(`Kreiran je verifikacioni zahtev ${verificationRequest.verificationId}.`);
+
+      const pending = await container.verificationRepository.getPendingVerification();
+      const verificationId = pending?.id ?? verificationRequest.verificationId;
+      setVerificationStep('code');
+      setVerificationStatus('Aktivan verification zahtev je pronađen. Generišem kod...');
+      const generatedCode = await container.verificationRepository.generateVerificationCode(verificationId);
+      setVerificationStep('confirm');
+      setVerificationStatus(`Generisan je kod ${generatedCode.code}. Potvrđujem transakciju...`);
+
+      const confirmation = await container.verificationRepository.confirmVerification(
+        verificationId,
+        generatedCode.code,
+      );
+
+      setCompletedConversion({
+        convertedAmount: resolveCompletedAmount(
+          confirmation.result?.final_amount ?? confirmation.result?.finalAmount,
+          preview.convertedAmount
+        ),
+        rate: preview.rate,
+      });
       await refreshAccounts();
       setStep('success');
     } catch (e: any) {
-      // surface error inline — stay on confirm screen
-      alert(e.message ?? 'Greška pri konverziji');
+      setSubmitError(e.message ?? 'Greška pri konverziji');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const getVerificationStepState = (stepId: VerificationStepId): VerificationStepState => {
+    if (submitError && verificationStep === stepId) return 'error';
+    if (!verificationStep) return 'pending';
+
+    const currentIndex = VERIFICATION_STEPS.findIndex(step => step.id === verificationStep);
+    const stepIndex = VERIFICATION_STEPS.findIndex(step => step.id === stepId);
+
+    if (stepIndex < currentIndex || step === 'success') return 'completed';
+    if (stepIndex === currentIndex) return submitting ? 'active' : 'completed';
+    return 'pending';
+  };
+
+  const getStepColors = (state: VerificationStepState) => {
+    switch (state) {
+      case 'completed':
+        return {
+          borderColor: 'rgba(6,214,160,0.28)',
+          backgroundColor: C.accentGlow,
+          iconColor: C.accent,
+          titleColor: C.textPrimary,
+          descriptionColor: C.textSecondary,
+        };
+      case 'active':
+        return {
+          borderColor: 'rgba(59,130,246,0.35)',
+          backgroundColor: C.primaryGlow,
+          iconColor: C.primary,
+          titleColor: C.textPrimary,
+          descriptionColor: C.textSecondary,
+        };
+      case 'error':
+        return {
+          borderColor: 'rgba(239,68,68,0.35)',
+          backgroundColor: C.dangerGlow,
+          iconColor: C.danger,
+          titleColor: C.textPrimary,
+          descriptionColor: '#fca5a5',
+        };
+      default:
+        return {
+          borderColor: C.border,
+          backgroundColor: C.bgCard,
+          iconColor: C.textMuted,
+          titleColor: C.textSecondary,
+          descriptionColor: C.textMuted,
+        };
+    }
+  };
+
+  const getStepIcon = (state: VerificationStepState) => {
+    switch (state) {
+      case 'completed':
+        return 'checkmark-circle';
+      case 'active':
+        return 'time';
+      case 'error':
+        return 'close-circle';
+      default:
+        return 'ellipse-outline';
     }
   };
 
@@ -151,7 +295,7 @@ export default function ExchangeScreen({ onBack }: Props) {
       <View style={[styles.flex1, styles.center, { backgroundColor: C.bg, padding: 24 }]}>
         <Ionicons name="checkmark-circle" size={64} color={C.accent} />
         <Text style={styles.successTitle}>Konverzija uspešna!</Text>
-        <Text style={styles.successSub}>Sredstva su konvertovana između računa.</Text>
+        <Text style={styles.successSub}>Sredstva su konvertovana i upisana u bazu.</Text>
         <View style={styles.card}>
           <View style={styles.sRow}><Text style={styles.sLabel}>Sa</Text><Text style={styles.sVal}>{resolvedFrom.name}</Text></View>
           <View style={styles.sRow}><Text style={styles.sLabel}>Na</Text><Text style={styles.sVal}>{resolvedTo.name}</Text></View>
@@ -190,6 +334,52 @@ export default function ExchangeScreen({ onBack }: Props) {
             </View>
           ))}
         </View>
+        <Text style={styles.previewRate}>
+          Po specifikaciji, potvrda ide kroz verification flow: request, pending, generate code, confirm.
+        </Text>
+        <View style={styles.statusCard}>
+          <Text style={styles.statusTitle}>Status verification toka</Text>
+          {VERIFICATION_STEPS.map((verificationStepItem, index) => {
+            const stepState = getVerificationStepState(verificationStepItem.id);
+            const stepColors = getStepColors(stepState);
+            return (
+              <View
+                key={verificationStepItem.id}
+                style={[
+                  styles.statusRow,
+                  {
+                    borderColor: stepColors.borderColor,
+                    backgroundColor: stepColors.backgroundColor,
+                  },
+                  index > 0 && styles.statusRowSpacing,
+                ]}
+              >
+                <View style={[styles.statusIconWrap, { backgroundColor: 'rgba(255,255,255,0.04)' }]}>
+                  <Ionicons name={getStepIcon(stepState)} size={18} color={stepColors.iconColor} />
+                </View>
+                <View style={styles.flex1}>
+                  <Text style={[styles.statusStepTitle, { color: stepColors.titleColor }]}>
+                    {verificationStepItem.title}
+                  </Text>
+                  <Text style={[styles.statusStepDescription, { color: stepColors.descriptionColor }]}>
+                    {verificationStepItem.description}
+                  </Text>
+                </View>
+                <Text style={[styles.statusBadge, { color: stepColors.iconColor }]}>
+                  {stepState === 'completed'
+                    ? 'Gotovo'
+                    : stepState === 'active'
+                      ? 'U toku'
+                      : stepState === 'error'
+                        ? 'Greška'
+                        : 'Čeka'}
+                </Text>
+              </View>
+            );
+          })}
+        </View>
+        {!!verificationStatus && <Text style={[styles.previewRate, { color: C.primary }]}>{verificationStatus}</Text>}
+        {!!submitError && <Text style={styles.errorText}>{submitError}</Text>}
         <View style={{ flexDirection: 'row', gap: 12 }}>
           <TouchableOpacity style={styles.secBtn} onPress={() => setStep('convert')}>
             <Text style={styles.secBtnText}>Nazad</Text>
@@ -291,8 +481,8 @@ export default function ExchangeScreen({ onBack }: Props) {
                     <Ionicons name="close" size={24} color={C.textSecondary} />
                   </TouchableOpacity>
                 </View>
-                {p.accs.map(a => (
-                  <TouchableOpacity key={a.accountNumber} style={styles.mItem} onPress={() => { p.setAcc(a); p.setVisible(false); }}>
+                {p.accs.map((a, index) => (
+                  <TouchableOpacity key={`exchange-picker-${a.id}-${a.accountNumber}-${a.currency}-${a.name}-${index}`} style={styles.mItem} onPress={() => { p.setAcc(a); p.setVisible(false); }}>
                     <View style={styles.mItemIcon}><Ionicons name="wallet" size={18} color={C.primary} /></View>
                     <View style={styles.flex1}>
                       <Text style={styles.mItemTitle}>{a.name} ({a.currency})</Text>
@@ -393,6 +583,14 @@ const styles = StyleSheet.create({
   cRow: { padding: 14, paddingHorizontal: 18 },
   cLabel: { color: C.textMuted, fontSize: 11, fontWeight: '500', textTransform: 'uppercase' },
   cVal: { color: C.textPrimary, fontSize: 14, fontWeight: '500', marginTop: 4 },
+  statusCard: { backgroundColor: C.bgCard, borderRadius: 18, borderWidth: 1, borderColor: C.border, padding: 16, marginBottom: 12 },
+  statusTitle: { color: C.textPrimary, fontSize: 14, fontWeight: '700', marginBottom: 12 },
+  statusRow: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 14, padding: 12 },
+  statusRowSpacing: { marginTop: 10 },
+  statusIconWrap: { width: 34, height: 34, borderRadius: 17, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  statusStepTitle: { fontSize: 13, fontWeight: '700' },
+  statusStepDescription: { fontSize: 11, marginTop: 2 },
+  statusBadge: { fontSize: 11, fontWeight: '700', marginLeft: 8, textTransform: 'uppercase' },
   card: { backgroundColor: C.bgCard, borderRadius: 18, borderWidth: 1, borderColor: C.border, padding: 18, width: '100%', marginBottom: 24 },
   sRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
   sLabel: { color: C.textMuted, fontSize: 13 },

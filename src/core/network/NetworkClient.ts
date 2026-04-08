@@ -3,6 +3,10 @@ import { tokenStorage } from '../storage/tokenStorage';
 export const API_CONFIG = {
   BASE_URL: process.env.EXPO_PUBLIC_API_BASE_URL || 'http://192.168.1.102:8080', // 'http://10.169.213.174:8080'
   USE_MOCK: false,
+
+  /*BASE_URL: process.env.EXPO_PUBLIC_API_BASE_URL || 'http://192.168.0.24:8080',
+  USE_MOCK: false,  // Connected to real backend*/
+
   TIMEOUT: 10000,
 };
 
@@ -11,6 +15,12 @@ export class ApiError extends Error {
     super(message);
     this.name = 'ApiError';
   }
+}
+
+interface RequestOptions {
+  headers?: Record<string, string>;
+  skipAuth?: boolean;
+  retryOnUnauthorized?: boolean;
 }
 
 export class NetworkClient {
@@ -22,8 +32,11 @@ export class NetworkClient {
     this.baseUrl = baseUrl;
   }
 
-  private async getHeaders(skipAuth = false): Promise<Record<string, string>> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  private async getHeaders(skipAuth = false, extraHeaders?: Record<string, string>): Promise<Record<string, string>> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...extraHeaders,
+    };
     if (!skipAuth) {
       const token = await tokenStorage.getAccessToken();
       if (token) headers['Authorization'] = `Bearer ${token}`;
@@ -31,15 +44,36 @@ export class NetworkClient {
     return headers;
   }
 
-  async get<T>(path: string): Promise<T> { return this.request<T>('GET', path); }
-  async post<T>(path: string, body?: unknown): Promise<T> { return this.request<T>('POST', path, body); }
-  async put<T>(path: string, body?: unknown): Promise<T> { return this.request<T>('PUT', path, body); }
-  async patch<T>(path: string, body?: unknown): Promise<T> { return this.request<T>('PATCH', path, body); }
-  async delete<T>(path: string): Promise<T> { return this.request<T>('DELETE', path); }
+  async get<T>(path: string, options?: RequestOptions): Promise<T> {
+    return this.request<T>('GET', path, undefined, options);
+  }
 
-  private async request<T>(method: string, path: string, body?: unknown, retry = true): Promise<T> {
-    const headers = await this.getHeaders();
+  async post<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> {
+    return this.request<T>('POST', path, body, options);
+  }
+
+  async put<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> {
+    return this.request<T>('PUT', path, body, options);
+  }
+
+  async delete<T>(path: string, options?: RequestOptions): Promise<T> {
+    return this.request<T>('DELETE', path, undefined, options);
+  }
+
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    options?: RequestOptions,
+    retry = true
+  ): Promise<T> {
+    const headers = await this.getHeaders(options?.skipAuth, options?.headers);
     let response: Response;
+    const isTransferRequest = path.includes('/api/transactions/transfer');
+    const isExchangeRequest =
+      path.includes('/api/exchange/convert') ||
+      path.includes('/api/exchange-rates/convert') ||
+      path.includes('/api/convert');
 
     console.log(`[API] ${method} ${this.baseUrl}${path}`);
 
@@ -52,13 +86,16 @@ export class NetworkClient {
       throw this.mapNetworkError(error);
     }
 
-    console.log(`[API] ${method} ${path} → ${response.status}`);
+    // 401 Try token refresh 
+    const retryOnUnauthorized = options?.retryOnUnauthorized ?? !(isTransferRequest || isExchangeRequest);
 
-    if (response.status === 401 && retry) {
-      console.log('[API] 401 — pokusavam refresh...');
+    if (response.status === 401 && retry && retryOnUnauthorized) {
       try {
         const newToken = await this.handleTokenRefresh();
-        if (newToken) return this.request<T>(method, path, body, false);
+        if (newToken) {
+          // Retry the original request with new token
+          return this.request<T>(method, path, body, options, false);
+        }
       } catch (e) {
         console.log('[API] Refresh failed:', e);
         await tokenStorage.clear();

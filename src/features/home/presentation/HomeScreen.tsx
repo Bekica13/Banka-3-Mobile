@@ -62,8 +62,8 @@ export default function HomeScreen({ hasNotif, user, onOpenAccount, onShowAllAcc
         <TouchableOpacity onPress={onShowAllAccounts}><Text style={styles.sectionLink}>Prikaži sve</Text></TouchableOpacity>
       </View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 24 }}>
-        {accounts.map(account => (
-          <TouchableOpacity key={account.accountNumber} style={styles.pill} onPress={() => onOpenAccount(account.id)} activeOpacity={0.7}>
+        {accounts.map((account, index) => (
+          <TouchableOpacity key={`home-account-${account.id}-${account.accountNumber}-${account.currency}-${account.name}-${index}`} style={styles.pill} onPress={() => onOpenAccount(account.id)} activeOpacity={0.7}>
             <Text style={styles.pillName}>{account.name}</Text>
             <Text style={styles.pillBal}>{fmt(account.balance, account.currency)}</Text>
           </TouchableOpacity>
@@ -91,10 +91,17 @@ export default function HomeScreen({ hasNotif, user, onOpenAccount, onShowAllAcc
         ))}
       </View>
 
-      {transactions.length > 0 && (
-        <>
-          <View style={[styles.sectionRow, { marginTop: 24 }]}>
-            <Text style={styles.sectionTitle}>Poslednje transakcije</Text>
+      <View style={[styles.sectionRow, { marginTop: 24 }]}>
+        <Text style={styles.sectionTitle}>Poslednje transakcije</Text>
+      </View>
+      {transactions.map((transaction, index) => (
+        <View key={`home-transaction-${transaction.id}-${transaction.accountId}-${transaction.date}-${transaction.amount}-${index}`} style={styles.txRow}>
+          <View style={[styles.txIcon, { backgroundColor: transaction.amount > 0 ? C.accentGlow : C.dangerGlow }]}>
+            <Ionicons name={transaction.amount > 0 ? 'arrow-down' : 'arrow-up'} size={18} color={transaction.amount > 0 ? C.accent : C.danger} />
+          </View>
+          <View style={styles.flex1}>
+            <Text style={styles.txDesc} numberOfLines={1}>{transaction.description}</Text>
+            <Text style={styles.txDate}>{transaction.date}</Text>
           </View>
           {transactions.map((transaction, i) => (
             <View key={`${transaction.id}-${i}`} style={styles.txRow}>

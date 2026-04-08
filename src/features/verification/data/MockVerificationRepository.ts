@@ -1,4 +1,9 @@
-import { IVerificationRepository } from '../domain/IVerificationRepository';
+import {
+  CreatedVerificationRequest,
+  IVerificationRepository,
+  PendingVerificationDetails,
+  VerificationRequestPayload,
+} from '../domain/IVerificationRepository';
 import { VerificationRequest } from '../../../shared/types/models';
 
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -12,6 +17,8 @@ const HISTORY: VerificationRequest[] = [
 ];
 
 export class MockVerificationRepository implements IVerificationRepository {
+  private generatedCodes = new Map<string, string>();
+
   async getHistory(): Promise<VerificationRequest[]> { await delay(500); return HISTORY; }
   async getPending(): Promise<VerificationRequest | null> {
     await delay(300);
@@ -19,4 +26,67 @@ export class MockVerificationRepository implements IVerificationRepository {
   }
   async confirm(id: number): Promise<void> { await delay(800); }
   async reject(id: number): Promise<void> { await delay(800); }
+
+  async createVerificationRequest(
+    type: string,
+    payload: VerificationRequestPayload
+  ): Promise<CreatedVerificationRequest> {
+    await delay(400);
+
+    return {
+      verificationId: `mock-${Date.now()}`,
+      expiresIn: 300,
+      maxAttempts: 3,
+      status: 'pending',
+    };
+  }
+
+  async getPendingVerification(): Promise<PendingVerificationDetails | null> {
+    await delay(300);
+
+    return {
+      id: 'mock-pending',
+      type: 'exchange',
+      status: 'pending',
+      expiresAt: new Date(Date.now() + 300000).toISOString(),
+      attemptsLeft: 3,
+      payload: {
+        from_account: '333000198765432120',
+        to_account: '333000198765432110',
+        amount: 500,
+        description: 'exchange 500 USD to RSD',
+      },
+    };
+  }
+
+  async generateVerificationCode(verificationId: string): Promise<{ code: string; expiresIn: number }> {
+    await delay(300);
+
+    const code = '791376';
+    this.generatedCodes.set(verificationId, code);
+
+    return {
+      code,
+      expiresIn: 300,
+    };
+  }
+
+  async confirmVerification(
+    verificationId: string,
+    code: string
+  ): Promise<{ status: string; transactionStatus?: string; result?: Record<string, unknown> }> {
+    await delay(400);
+
+    if (this.generatedCodes.get(verificationId) !== code.trim()) {
+      throw new Error('Verifikacioni kod nije ispravan.');
+    }
+
+    return {
+      status: 'confirmed',
+      transactionStatus: 'completed',
+      result: {
+        verification_id: verificationId,
+      },
+    };
+  }
 }

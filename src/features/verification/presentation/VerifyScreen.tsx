@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { C } from '../../../shared/constants/theme';
 import { MOCK_VERIFICATIONS, MOCK_PENDING } from '../../../shared/data/mockData';
-import { statusCfg, generateOTP, VStatus } from '../../../shared/utils/formatters';
+import { statusCfg, VStatus } from '../../../shared/utils/formatters';
+import { container } from '../../../core/di/container';
 
 interface Props {
   verified: boolean;
@@ -11,26 +12,68 @@ interface Props {
 }
 
 export default function VerifyScreen({ verified, onShowModal }: Props) {
-  const [otpCode, setOtpCode] = useState<string | null>(null);
-  const [otpTimer, setOtpTimer] = useState(0);
+  const [generatedCode, setGeneratedCode] = useState<string | null>(null);
+  const [codeTimer, setCodeTimer] = useState(0);
   const [copied, setCopied] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
 
-  // OTP countdown
   useEffect(() => {
-    if (otpTimer <= 0) { setOtpCode(null); return; }
-    const t = setInterval(() => setOtpTimer(prev => prev - 1), 1000);
-    return () => clearInterval(t);
-  }, [otpTimer]);
+    if (codeTimer <= 0) {
+      setGeneratedCode(null);
+      return;
+    }
 
-  const handleGenerateOTP = () => {
-    const code = generateOTP();
-    setOtpCode(code);
-    setOtpTimer(300); // 5 minutes
-    setCopied(false);
+    const t = setInterval(() => setCodeTimer(prev => prev - 1), 1000);
+    return () => clearInterval(t);
+  }, [codeTimer]);
+
+  const loadPending = async () => {
+    setLoading(true);
+    setErrorMessage('');
+
+    try {
+      const pending = await container.verificationRepository.getPendingVerification();
+      if (!pending) {
+        setPendingId(null);
+        setStatusMessage('Nema aktivnog verifikacionog zahteva.');
+        return;
+      }
+
+      setPendingId(pending.id);
+      setStatusMessage(`Aktivan je zahtev ${pending.id}. Spreman je za generisanje koda.`);
+    } catch (e: any) {
+      setErrorMessage(e.message ?? 'Neuspešno učitavanje aktivnog zahteva.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGenerateCode = async () => {
+    if (!pendingId) {
+      setErrorMessage('Nema aktivnog verification request-a.');
+      return;
+    }
+
+    setLoading(true);
+    setErrorMessage('');
+
+    try {
+      const generated = await container.verificationRepository.generateVerificationCode(pendingId);
+      setGeneratedCode(generated.code);
+      setCodeTimer(generated.expiresIn);
+      setCopied(false);
+      setStatusMessage(`Kod je generisan za verification request ${pendingId}.`);
+    } catch (e: any) {
+      setErrorMessage(e.message ?? 'Neuspešno generisanje verifikacionog koda.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleCopy = () => {
-    // In real app: Clipboard.setStringAsync(otpCode)
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -40,7 +83,7 @@ export default function VerifyScreen({ verified, onShowModal }: Props) {
   return (
     <ScrollView style={styles.flex1} contentContainerStyle={{ padding: 20 }} showsVerticalScrollIndicator={false}>
       <Text style={styles.title}>Verifikacija</Text>
-      <Text style={styles.subtitle}>Potvrda transakcija i generisanje kodova</Text>
+      <Text style={styles.subtitle}>Pregled aktivnog zahteva i generisanje verifikacionog koda</Text>
 
       {/* Pending banner */}
       {!verified && (
@@ -54,49 +97,60 @@ export default function VerifyScreen({ verified, onShowModal }: Props) {
         </TouchableOpacity>
       )}
 
-      {/* OTP Generator */}
+      {/* Verification code */}
       <View style={styles.otpCard}>
         <View style={styles.otpHeader}>
           <View style={styles.otpIconWrap}>
             <Ionicons name="key" size={22} color={C.primary} />
           </View>
           <View style={styles.flex1}>
-            <Text style={styles.otpTitle}>Jednokratna lozinka</Text>
-            <Text style={styles.otpDesc}>Za potvrdu transakcija na web aplikaciji</Text>
+            <Text style={styles.otpTitle}>Verifikacioni kod</Text>
+            <Text style={styles.otpDesc}>Flow po specifikaciji: pending request, generate code, confirm.</Text>
           </View>
         </View>
+        <TouchableOpacity style={[styles.otpGenBtn, loading && { opacity: 0.7 }]} onPress={loadPending} activeOpacity={0.8} disabled={loading}>
+          {loading ? <ActivityIndicator color="#fff" /> : <Ionicons name="download-outline" size={20} color="#fff" />}
+          <Text style={styles.otpGenText}>Preuzmi aktivan zahtev</Text>
+        </TouchableOpacity>
 
-        {otpCode ? (
+        {!!statusMessage && <Text style={styles.infoText}>{statusMessage}</Text>}
+        {!!errorMessage && <Text style={styles.errorText}>{errorMessage}</Text>}
+
+        {generatedCode ? (
           <View style={styles.otpDisplay}>
             <View style={styles.otpCodeRow}>
-              {otpCode.split('').map((digit, i) => (
+              {generatedCode.split('').map((digit, i) => (
                 <View key={i} style={styles.otpDigitBox}>
                   <Text style={styles.otpDigit}>{digit}</Text>
                 </View>
               ))}
             </View>
             <View style={styles.otpTimerRow}>
-              <Ionicons name="time-outline" size={14} color={otpTimer < 60 ? C.danger : C.textSecondary} />
-              <Text style={[styles.otpTimerText, otpTimer < 60 && { color: C.danger }]}>
-                Ističe za {fmtTime(otpTimer)}
+              <Ionicons name="time-outline" size={14} color={codeTimer < 60 ? C.danger : C.textSecondary} />
+              <Text style={[styles.otpTimerText, codeTimer < 60 && { color: C.danger }]}>
+                Ističe za {fmtTime(codeTimer)}
               </Text>
+            </View>
+            <View style={styles.specBox}>
+              <Text style={styles.specTitle}>Po specifikaciji</Text>
+              <Text style={styles.specText}>Kod traje 5 minuta i vezan je za aktivan verification request sa backenda.</Text>
             </View>
             <View style={styles.otpActions}>
               <TouchableOpacity style={styles.otpCopyBtn} onPress={handleCopy} activeOpacity={0.7}>
                 <Ionicons name={copied ? 'checkmark' : 'copy-outline'} size={18} color={copied ? C.accent : C.primary} />
                 <Text style={[styles.otpCopyText, copied && { color: C.accent }]}>
-                  {copied ? 'Kopirano!' : 'Kopiraj kod'}
+                  {copied ? 'Kopirano!' : 'Prikaži kod'}
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.otpNewBtn} onPress={handleGenerateOTP} activeOpacity={0.7}>
+              <TouchableOpacity style={[styles.otpNewBtn, loading && { opacity: 0.7 }]} onPress={handleGenerateCode} activeOpacity={0.7} disabled={loading}>
                 <Ionicons name="refresh" size={18} color={C.textSecondary} />
                 <Text style={styles.otpNewText}>Novi kod</Text>
               </TouchableOpacity>
             </View>
           </View>
-        ) : (
-          <TouchableOpacity style={styles.otpGenBtn} onPress={handleGenerateOTP} activeOpacity={0.8}>
-            <Ionicons name="key-outline" size={20} color="#fff" />
+        ) : !!pendingId && (
+          <TouchableOpacity style={[styles.otpGenBtn, loading && { opacity: 0.7 }]} onPress={handleGenerateCode} activeOpacity={0.8} disabled={loading}>
+            {loading ? <ActivityIndicator color="#fff" /> : <Ionicons name="key-outline" size={20} color="#fff" />}
             <Text style={styles.otpGenText}>Generiši kod</Text>
           </TouchableOpacity>
         )}
@@ -155,6 +209,11 @@ const styles = StyleSheet.create({
   otpNewText: { color: C.textSecondary, fontSize: 13, fontWeight: '500' },
   otpGenBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: C.primary, borderRadius: 14, padding: 14, shadowColor: C.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 12, elevation: 6 },
   otpGenText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  specBox: { width: '100%', backgroundColor: C.bg, borderRadius: 12, borderWidth: 1, borderColor: C.border, padding: 12, marginBottom: 12 },
+  specTitle: { color: C.textPrimary, fontSize: 12, fontWeight: '600' },
+  specText: { color: C.textSecondary, fontSize: 12, marginTop: 4, lineHeight: 18 },
+  infoText: { color: C.primary, fontSize: 12, marginTop: 14 },
+  errorText: { color: C.danger, fontSize: 12, marginTop: 14 },
   // History
   vRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: C.bgCard, borderRadius: 14, padding: 14, paddingHorizontal: 16, borderWidth: 1, borderColor: C.border, marginBottom: 4 },
   vIcon: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },

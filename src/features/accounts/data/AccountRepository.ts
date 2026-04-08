@@ -6,22 +6,39 @@ interface ApiAccount {
   account_number: string;
   account_name?: string;
   name?: string;
-  owner_id?: number;
-  currency?: string;
-  balance?: number;
-  available_balance?: number;
-  status?: string;
+  account_name?: string;
+  type?: string;
   account_type?: string;
+  currency?: string;
+  currency_code?: string;
+  balance?: number | string;
+  availableBalance?: number | string;
+  available_balance?: number | string;
+  reservedAmount?: number | string;
+  reserved_amount?: number | string;
+  status?: string;
+  createdAt?: string;
+  created_at?: string;
   creation_date?: string;
+  expiresAt?: string;
+  expires_at?: string;
   expiration_date?: string;
 }
 
-interface ApiTransaction {
-  from_account?: string;
-  to_account?: string;
-  initial_amount?: number;
-  final_amount?: number;
-  amount?: number;
+type AccountListApiResponse =
+  | AccountApiResponse[]
+  | {
+      value?: AccountApiResponse[];
+      data?: AccountApiResponse[];
+    };
+
+interface TransactionApiResponse {
+  id?: number | string;
+  accountId?: number | string;
+  account_id?: number | string;
+  description?: string;
+  desc?: string;
+  amount?: number | string;
   currency?: string;
   purpose?: string;
   payment_code?: string;
@@ -92,8 +109,21 @@ export class AccountRepository implements IAccountRepository {
   constructor(private client: NetworkClient) {}
 
   async getAccounts(): Promise<Account[]> {
-    const data = await this.client.get<ApiAccount[]>('/api/accounts');
-    return data.map(mapAccount);
+    try {
+      const data = await this.client.get<AccountListApiResponse>('/api/accounts');
+      const accounts = this.getUniqueAccounts(
+        this.unwrapAccountsResponse(data).map(account => this.mapAccount(account))
+      );
+      if (accounts.length > 0) {
+        return accounts;
+      }
+    } catch (error) {
+      if (!this.shouldUseMockFallback(error)) {
+        throw error;
+      }
+    }
+
+    return this.fallbackRepository.getAccounts();
   }
 
   async getAccountById(id: number): Promise<Account> {
@@ -110,13 +140,117 @@ export class AccountRepository implements IAccountRepository {
     if (!account) return [];
 
     try {
-      const data = await this.client.get<ApiTransaction[]>(
-        `/api/transactions?account_number=${account.accountNumber}`
-      );
-      return data.map((t, i) => mapTransaction(t, accountId, i));
-    } catch (e) {
-      if (e instanceof ApiError && e.statusCode === 404) return [];
-      throw e;
+      const data = await this.client.get<TransactionApiResponse[]>(`/api/transactions?accountId=${accountId}`);
+      if (data.length > 0) {
+        return data.map(transaction => this.mapTransaction(transaction, accountId));
+      }
+    } catch (error) {
+      if (!this.shouldUseMockFallback(error)) {
+        throw error;
+      }
     }
+
+    return this.fallbackRepository.getTransactions(accountId);
+  }
+
+  private mapAccount(account: AccountApiResponse): Account {
+    const accountNumber = account.accountNumber ?? account.account_number ?? '';
+    const fallbackId = this.getFallbackAccountId(accountNumber);
+    const normalizedStatus = (account.status ?? '').toLowerCase();
+
+    return {
+      id: this.toNumber(account.id ?? account.accountId ?? account.account_id ?? fallbackId),
+      accountNumber,
+      ownerId: this.toNumber(account.ownerId ?? account.owner_id ?? 0),
+      name: account.name ?? account.account_name ?? 'Racun',
+      type: this.mapAccountType(account.type ?? account.account_type),
+      currency: account.currency ?? account.currency_code ?? 'RSD',
+      balance: this.toNumber(account.balance),
+      availableBalance: this.toNumber(account.availableBalance ?? account.available_balance ?? account.balance ?? 0),
+      reservedAmount: this.toNumber(account.reservedAmount ?? account.reserved_amount ?? 0),
+      status: normalizedStatus === 'inactive' ? 'inactive' : 'active',
+      createdAt: account.createdAt ?? account.created_at ?? account.creation_date ?? '',
+      expiresAt: account.expiresAt ?? account.expires_at ?? account.expiration_date ?? '',
+    };
+  }
+
+  private mapTransaction(transaction: TransactionApiResponse, fallbackAccountId: number): Transaction {
+    return {
+      id: this.toNumber(transaction.id),
+      accountId: this.toNumber(transaction.accountId ?? transaction.account_id ?? fallbackAccountId),
+      description: transaction.description ?? transaction.desc ?? 'Transakcija',
+      amount: this.toNumber(transaction.amount),
+      currency: transaction.currency ?? 'RSD',
+      date: transaction.date ?? '',
+      status: transaction.status === 'pending' || transaction.status === 'rejected' ? transaction.status : 'completed',
+      recipientName: transaction.recipientName ?? transaction.recipient_name,
+      recipientAccount: transaction.recipientAccount ?? transaction.recipient_account,
+      paymentCode: transaction.paymentCode ?? transaction.payment_code,
+      purpose: transaction.purpose,
+    };
+  }
+
+  private mapAccountType(type: string | undefined): Account['type'] {
+    const normalizedType = (type ?? '').toLowerCase();
+
+    if (normalizedType === 'devizni' || normalizedType === 'foreign_currency' || normalizedType === 'foreign') {
+      return 'devizni';
+    }
+
+    if (normalizedType === 'stedni' || normalizedType === 'savings') {
+      return 'stedni';
+    }
+
+    if (normalizedType === 'poslovni' || normalizedType === 'business') {
+      return 'poslovni';
+    }
+  }
+
+  private unwrapAccountsResponse(response: AccountListApiResponse): AccountApiResponse[] {
+    if (Array.isArray(response)) {
+      return response;
+    }
+
+    return response.value ?? response.data ?? [];
+  }
+
+  private getUniqueAccounts(accounts: Account[]): Account[] {
+    const uniqueAccounts = new Map<string, Account>();
+
+    for (const account of accounts) {
+      const signature = [
+        account.accountNumber || 'no-account-number',
+        account.currency || 'no-currency',
+        account.name || 'no-name',
+        account.id || 0,
+      ].join('|');
+
+      if (!uniqueAccounts.has(signature)) {
+        uniqueAccounts.set(signature, account);
+      }
+    }
+
+    return Array.from(uniqueAccounts.values());
+  }
+
+  private getFallbackAccountId(accountNumber: string): number {
+    const digits = accountNumber.replace(/\D/g, '');
+    if (!digits) {
+      return 0;
+    }
+
+    return this.toNumber(digits.slice(-9));
+  }
+
+  private toNumber(value: number | string | undefined): number {
+    const parsed = typeof value === 'string' ? parseFloat(value) : value;
+    return Number.isFinite(parsed) ? parsed as number : 0;
+  }
+
+  private shouldUseMockFallback(error: unknown): boolean {
+    return (
+      error instanceof ApiError &&
+      (error.statusCode === 0 || error.statusCode === 404 || error.statusCode >= 500)
+    );
   }
 }

@@ -74,8 +74,8 @@ export default function AccountsScreen({ detailId, onSelect, onBack }: Props) {
           <ActivityIndicator color={C.primary} />
         ) : transactions.length === 0 ? (
           <Text style={{ color: C.textMuted, textAlign: 'center', padding: 40 }}>Nema transakcija</Text>
-        ) : transactions.map(transaction => (
-          <View key={`${transaction.id}-${transaction.accountId}-${transaction.date}-${transaction.amount}`} style={styles.txRow}>
+        ) : transactions.map((transaction, index) => (
+          <View key={`accounts-transaction-${transaction.id}-${transaction.accountId}-${transaction.date}-${transaction.amount}-${index}`} style={styles.txRow}>
             <View style={[styles.txIcon, { backgroundColor: transaction.amount > 0 ? C.accentGlow : C.dangerGlow }]}>
               <Ionicons name={transaction.amount > 0 ? 'arrow-down' : 'arrow-up'} size={18} color={transaction.amount > 0 ? C.accent : C.danger} />
             </View>
@@ -97,8 +97,8 @@ export default function AccountsScreen({ detailId, onSelect, onBack }: Props) {
     <ScrollView style={styles.flex1} contentContainerStyle={{ padding: 20 }} showsVerticalScrollIndicator={false}>
       <Text style={styles.title}>Moji racuni</Text>
       <Text style={styles.subtitle}>{accounts.length} aktivna racuna</Text>
-      {accounts.map(account => (
-        <TouchableOpacity key={`${account.id}-${account.accountNumber}`} style={styles.accRow} onPress={() => onSelect(account.id)} activeOpacity={0.7}>
+      {accounts.map((account, index) => (
+        <TouchableOpacity key={`accounts-list-${account.id}-${account.accountNumber}-${account.currency}-${account.name}-${index}`} style={styles.accRow} onPress={() => onSelect(account.id)} activeOpacity={0.7}>
           <View style={styles.accIcon}><Ionicons name="wallet" size={22} color={C.primary} /></View>
           <View style={styles.flex1}>
             <Text style={styles.accName}>{account.name}</Text>

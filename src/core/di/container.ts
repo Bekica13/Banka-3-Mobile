@@ -22,6 +22,8 @@ import { ExchangeRepository } from '../../features/exchange/data/ExchangeReposit
 import { RealCardRepository } from '../../features/cards/data/RealCardRepository';
 import { RealLoanRepository } from '../../features/loans/data/RealLoanRepository';
 
+import { VerificationRepository } from '../../features/verification/data/VerificationRepository';
+
 class Container {
   private _authRepository?: IAuthRepository;
   private _accountRepository?: IAccountRepository;
@@ -51,7 +53,9 @@ class Container {
 
   get verificationRepository(): IVerificationRepository {
     if (!this._verificationRepository) {
-      this._verificationRepository = new MockVerificationRepository();
+      this._verificationRepository = API_CONFIG.USE_MOCK
+        ? new MockVerificationRepository()
+        : new VerificationRepository(apiClient);
     }
     return this._verificationRepository;
   }
