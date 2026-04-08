@@ -19,6 +19,7 @@ import { MockLoanRepository } from '../../features/loans/data/MockLoanRepository
 import { AuthRepository } from '../../features/auth/data/AuthRepository';
 import { AccountRepository } from '../../features/accounts/data/AccountRepository';
 import { ExchangeRepository } from '../../features/exchange/data/ExchangeRepository';
+import { RealCardRepository } from '../../features/cards/data/RealCardRepository';
 
 class Container {
   private _authRepository?: IAuthRepository;
@@ -72,7 +73,9 @@ class Container {
 
   get cardRepository(): ICardRepository {
     if (!this._cardRepository) {
-      this._cardRepository = new MockCardRepository();
+      this._cardRepository = API_CONFIG.USE_MOCK
+        ? new MockCardRepository()
+        : new RealCardRepository(apiClient);
     }
     return this._cardRepository;
   }

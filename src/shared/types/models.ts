@@ -1,4 +1,3 @@
-
 export interface Client {
   id: number;
   firstName: string;
@@ -69,11 +68,11 @@ export type CardType = 'debit' | 'credit';
 export type CardStatus = 'active' | 'blocked' | 'deactivated';
 
 export interface Card {
-  id: number;
-  cardNumber: string;
+  id: string;          // card_number je PK na backendu (string)
+  cardNumber: string;  // formatiran sa razmacima: "4532 1234 5678 9012"
   cardName: string;
   cardType: CardType;
-  accountId: number;
+  accountId: string;   // account_number je string na backendu
   expiresAt: string;
   limit: number;
   status: CardStatus;

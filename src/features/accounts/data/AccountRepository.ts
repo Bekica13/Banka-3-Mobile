@@ -1,145 +1,122 @@
 import { IAccountRepository } from '../domain/IAccountRepository';
 import { Account, Transaction } from '../../../shared/types/models';
 import { ApiError, NetworkClient } from '../../../core/network/NetworkClient';
-import { MockAccountRepository } from './MockAccountRepository';
 
-interface AccountApiResponse {
-  id?: number | string;
-  accountId?: number | string;
-  account_id?: number | string;
-  accountNumber?: string;
-  account_number?: string;
-  ownerId?: number | string;
-  owner_id?: number | string;
+interface ApiAccount {
+  account_number: string;
+  account_name?: string;
   name?: string;
-  type?: string;
+  owner_id?: number;
   currency?: string;
-  balance?: number | string;
-  availableBalance?: number | string;
-  available_balance?: number | string;
-  reservedAmount?: number | string;
-  reserved_amount?: number | string;
+  balance?: number;
+  available_balance?: number;
   status?: string;
-  createdAt?: string;
-  created_at?: string;
-  expiresAt?: string;
-  expires_at?: string;
+  account_type?: string;
+  creation_date?: string;
+  expiration_date?: string;
 }
 
-interface TransactionApiResponse {
-  id?: number | string;
-  accountId?: number | string;
-  account_id?: number | string;
-  description?: string;
-  desc?: string;
-  amount?: number | string;
+interface ApiTransaction {
+  from_account?: string;
+  to_account?: string;
+  initial_amount?: number;
+  final_amount?: number;
+  amount?: number;
   currency?: string;
-  date?: string;
-  status?: string;
-  recipientName?: string;
-  recipient_name?: string;
-  recipientAccount?: string;
-  recipient_account?: string;
-  paymentCode?: string;
-  payment_code?: string;
   purpose?: string;
+  payment_code?: string;
+  reference_number?: string;
+  status?: string;
+  timestamp?: string;
+  date?: string;
+  description?: string;
+}
+
+// accountNumber string → stable numeric hash za id
+function accountNumberToId(accountNumber: string): number {
+  let hash = 0;
+  for (let i = 0; i < accountNumber.length; i++) {
+    hash = (hash * 31 + accountNumber.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
+function mapAccountType(type: string | undefined): Account['type'] {
+  const t = type?.toLowerCase() ?? '';
+  if (t.includes('foreign') || t.includes('devizni')) return 'devizni';
+  if (t.includes('savings') || t.includes('stedni')) return 'stedni';
+  if (t.includes('business') || t.includes('poslovni')) return 'poslovni';
+  return 'tekuci';
+}
+
+function mapAccount(a: ApiAccount): Account {
+  return {
+    id: accountNumberToId(a.account_number),
+    accountNumber: a.account_number,
+    ownerId: a.owner_id ?? 0,
+    name: a.account_name ?? a.name ?? 'Račun',
+    type: mapAccountType(a.account_type),
+    currency: a.currency ?? 'RSD',
+    balance: a.balance ?? 0,
+    availableBalance: a.available_balance ?? a.balance ?? 0,
+    reservedAmount: 0,
+    status: a.status?.toLowerCase() === 'inactive' ? 'inactive' : 'active',
+    createdAt: a.creation_date ?? '',
+    expiresAt: a.expiration_date ?? '',
+  };
+}
+
+function mapTransaction(t: ApiTransaction, accountId: number, index: number): Transaction {
+  const amount = t.final_amount ?? t.initial_amount ?? t.amount ?? 0;
+  const rawStatus = t.status?.toLowerCase() ?? '';
+  let status: Transaction['status'] = 'completed';
+  if (rawStatus.includes('pending') || rawStatus.includes('obrada')) status = 'pending';
+  else if (rawStatus.includes('reject') || rawStatus.includes('odbij')) status = 'rejected';
+
+  return {
+    id: index,
+    accountId,
+    description: t.purpose ?? t.description ?? 'Transakcija',
+    amount,
+    currency: t.currency ?? 'RSD',
+    date: t.timestamp ? new Date(t.timestamp).toLocaleDateString('sr-RS') : (t.date ?? ''),
+    status,
+    recipientName: undefined,
+    recipientAccount: t.to_account,
+    paymentCode: t.payment_code,
+    purpose: t.purpose,
+  };
 }
 
 export class AccountRepository implements IAccountRepository {
-  private fallbackRepository = new MockAccountRepository();
-
   constructor(private client: NetworkClient) {}
 
   async getAccounts(): Promise<Account[]> {
-    try {
-      const data = await this.client.get<AccountApiResponse[]>('/api/accounts');
-      const accounts = data.map(account => this.mapAccount(account));
-      if (accounts.length > 0) {
-        return accounts;
-      }
-    } catch (error) {
-      if (!this.shouldUseMockFallback(error)) {
-        throw error;
-      }
-    }
-
-    return this.fallbackRepository.getAccounts();
+    const data = await this.client.get<ApiAccount[]>('/api/accounts');
+    return data.map(mapAccount);
   }
 
   async getAccountById(id: number): Promise<Account> {
     const accounts = await this.getAccounts();
-    const account = accounts.find(item => item.id === id);
-    if (!account) throw new Error('Racun nije pronadjen');
+    const account = accounts.find(a => a.id === id);
+    if (!account) throw new Error('Račun nije pronađen');
     return account;
   }
 
   async getTransactions(accountId: number): Promise<Transaction[]> {
     if (!accountId) return [];
+    const accounts = await this.getAccounts();
+    const account = accounts.find(a => a.id === accountId);
+    if (!account) return [];
 
     try {
-      const data = await this.client.get<TransactionApiResponse[]>(`/api/transactions?accountId=${accountId}`);
-      if (data.length > 0) {
-        return data.map(transaction => this.mapTransaction(transaction, accountId));
-      }
-    } catch (error) {
-      if (!this.shouldUseMockFallback(error)) {
-        throw error;
-      }
+      const data = await this.client.get<ApiTransaction[]>(
+        `/api/transactions?account_number=${account.accountNumber}`
+      );
+      return data.map((t, i) => mapTransaction(t, accountId, i));
+    } catch (e) {
+      if (e instanceof ApiError && e.statusCode === 404) return [];
+      throw e;
     }
-
-    return this.fallbackRepository.getTransactions(accountId);
-  }
-
-  private mapAccount(account: AccountApiResponse): Account {
-    return {
-      id: this.toNumber(account.id ?? account.accountId ?? account.account_id),
-      accountNumber: account.accountNumber ?? account.account_number ?? '',
-      ownerId: this.toNumber(account.ownerId ?? account.owner_id ?? 0),
-      name: account.name ?? 'Racun',
-      type: this.mapAccountType(account.type),
-      currency: account.currency ?? 'RSD',
-      balance: this.toNumber(account.balance),
-      availableBalance: this.toNumber(account.availableBalance ?? account.available_balance ?? account.balance ?? 0),
-      reservedAmount: this.toNumber(account.reservedAmount ?? account.reserved_amount ?? 0),
-      status: account.status === 'inactive' ? 'inactive' : 'active',
-      createdAt: account.createdAt ?? account.created_at ?? '',
-      expiresAt: account.expiresAt ?? account.expires_at ?? '',
-    };
-  }
-
-  private mapTransaction(transaction: TransactionApiResponse, fallbackAccountId: number): Transaction {
-    return {
-      id: this.toNumber(transaction.id),
-      accountId: this.toNumber(transaction.accountId ?? transaction.account_id ?? fallbackAccountId),
-      description: transaction.description ?? transaction.desc ?? 'Transakcija',
-      amount: this.toNumber(transaction.amount),
-      currency: transaction.currency ?? 'RSD',
-      date: transaction.date ?? '',
-      status: transaction.status === 'pending' || transaction.status === 'rejected' ? transaction.status : 'completed',
-      recipientName: transaction.recipientName ?? transaction.recipient_name,
-      recipientAccount: transaction.recipientAccount ?? transaction.recipient_account,
-      paymentCode: transaction.paymentCode ?? transaction.payment_code,
-      purpose: transaction.purpose,
-    };
-  }
-
-  private mapAccountType(type: string | undefined): Account['type'] {
-    if (type === 'devizni' || type === 'stedni' || type === 'poslovni') {
-      return type;
-    }
-
-    return 'tekuci';
-  }
-
-  private toNumber(value: number | string | undefined): number {
-    const parsed = typeof value === 'string' ? parseFloat(value) : value;
-    return Number.isFinite(parsed) ? parsed as number : 0;
-  }
-
-  private shouldUseMockFallback(error: unknown): boolean {
-    return (
-      error instanceof ApiError &&
-      (error.statusCode === 0 || error.statusCode === 404 || error.statusCode >= 500)
-    );
   }
 }
