@@ -68,11 +68,11 @@ export type CardType = 'debit' | 'credit';
 export type CardStatus = 'active' | 'blocked' | 'deactivated';
 
 export interface Card {
-  id: string;          // card_number je PK na backendu (string)
-  cardNumber: string;  // formatiran sa razmacima: "4532 1234 5678 9012"
+  id: string;
+  cardNumber: string;
   cardName: string;
   cardType: CardType;
-  accountId: string;   // account_number je string na backendu
+  accountId: string;
   expiresAt: string;
   limit: number;
   status: CardStatus;
@@ -109,7 +109,7 @@ export interface LoanApplication {
   permanentEmployment: boolean;
   employmentYears: number;
   maturityMonths: number;
-  accountId: number;
+  accountNumber: string;  // account_number string, ne numeric id
   phone: string;
 }
 
